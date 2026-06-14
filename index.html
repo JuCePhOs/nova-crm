@@ -5608,7 +5608,7 @@ function renderHorarios(){
   var hoy=todayISO();
   var diaHoy=diaHoyNombre();
   var mc=document.getElementById('main-content');
-  var tarjetas=[];
+  var todas=[];
 
   (STATE.cursos||[]).forEach(function(c){
     var grupos=(c.grupos&&c.grupos.length)?c.grupos:[{
@@ -5620,23 +5620,55 @@ function renderHorarios(){
       var gInstr=g.instructorId||c.instructorId, gAsist=g.asistenteId||c.asistenteId;
       var esP=gInstr===uid, esA=gAsist===uid;
       if(!esP&&!esA) return;
-      if(!diasOverlap(diaHoy, g.dia||c.dia)) return;
-      tarjetas.push({c:c,g:g,esP:esP,esA:esA});
+      todas.push({c:c,g:g,esP:esP,esA:esA});
     });
   });
+
+  var deHoy = todas.filter(function(t){return diasOverlap(diaHoy, t.g.dia||t.c.dia);});
+  var otros = todas.filter(function(t){return !diasOverlap(diaHoy, t.g.dia||t.c.dia);});
 
   var header='<div class="page-header fade-in"><h2>📅 Horarios</h2><p>Hoy: '+diaHoy+', '
     +new Date().toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})+'</p></div>';
 
-  if(tarjetas.length===0){
-    mc.innerHTML=header+'<div class="empty"><div class="empty-icon">📅</div><h3>No tienes clases programadas para hoy</h3>'
-      +'<p>Tus cursos asignados no caen en "'+diaHoy+'", o aún no tienes cursos asignados.</p></div>';
-    return;
+  var html=header;
+  if(deHoy.length===0){
+    html+='<div class="empty"><div class="empty-icon">📅</div><h3>No tienes clases programadas para hoy</h3>'
+      +'<p>Ninguno de tus grupos asignados cae en "'+diaHoy+'".</p></div>';
+  } else {
+    html += deHoy.map(renderTarjetaHorario).join('');
   }
 
-  mc.innerHTML = header + tarjetas.map(renderTarjetaHorario).join('');
+  if(otros.length>0){
+    html += '<div style="margin-top:28px;margin-bottom:10px;font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">'
+      +'📋 Resto de tu horario semanal ('+otros.length+')</div>';
+    html += otros.map(renderTarjetaResumen).join('');
+  }
+
+  if(todas.length===0){
+    html += '<div class="empty"><div class="empty-icon">🗓️</div><h3>Aún no tienes grupos asignados</h3>'
+      +'<p>Pídele al administrador que te asigne como instructor o asistente en algún grupo desde la pestaña Cursos.</p></div>';
+  }
+
+  mc.innerHTML = html;
 }
 
+// ── Tarjeta compacta de solo-lectura para días que no son hoy ──────────────
+function renderTarjetaResumen(t){
+  var c=t.c, g=t.g;
+  var info=[];
+  if(g.dia) info.push('📅 '+esc(g.dia));
+  if(g.horarioDesde&&g.horarioHasta) info.push('⏰ '+g.horarioDesde+'–'+g.horarioHasta);
+  if(g.salon) info.push((g.salon==='Netflix'?'🔴':g.salon==='Online'?'💻':'▶️')+' '+esc(g.salon));
+  var roles=[];
+  if(t.esP) roles.push('Principal');
+  if(t.esA) roles.push('Asistente');
+  return '<div class="fade-in" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;'
+    +'padding:10px 14px;margin-bottom:8px;opacity:.75;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'
+    +'<div><strong style="font-size:13px">'+esc(cursoGrupoLabel(c.nombre,g.nombre))+'</strong>'
+    +(info.length?' <span style="font-size:12px;color:var(--text3)">· '+info.join(' · ')+'</span>':'')+'</div>'
+    +'<div style="font-size:11px;color:var(--text3)">'+roles.join(' / ')+'</div>'
+    +'</div>';
+}
 // ── Tarjeta de una clase de hoy ────────────────────────────────────────────
 function renderTarjetaHorario(t){
   var c=t.c, g=t.g, hoy=todayISO();
