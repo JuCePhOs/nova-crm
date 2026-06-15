@@ -1358,9 +1358,12 @@ function renderCursosInstructor(){
   if(!mc)return;
   if(!currentUser){mc.innerHTML='';return;}
   var uid=currentUser.id;
+  var maestro=(STATE.instructores||[]).find(function(i){
+    return i.userId===currentUser.id||i.nombre===currentUser.name||i.nombre===currentUser.username;
+  });
   // Find courses where this instructor is assigned
   var miosCursos=(STATE.cursos||[]).filter(function(c){
-    return c.instructorId===uid||c.asistenteId===uid;
+    return c.instructorId===uid||c.asistenteId===uid||(maestro&&(c.instructorId===maestro.id||c.asistenteId===maestro.id));
   });
   if(!STATE.modulosCurso) STATE.modulosCurso={};
   var html='<div class="page-header fade-in"><h2>📚 Mis Cursos</h2>'
@@ -1371,7 +1374,8 @@ function renderCursosInstructor(){
     mc.innerHTML=html;return;
   }
   miosCursos.forEach(function(curso){
-    var rol=curso.instructorId===uid?'Instructor Principal':'Instructor Asistente';
+    var esPrincipal=curso.instructorId===uid||(maestro&&curso.instructorId===maestro.id);
+    var rol=esPrincipal?'Instructor Principal':'Instructor Asistente';
     var grupos=curso.grupos||[];
     html+='<div class="fade-in" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:18px">';
     html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">';
@@ -5613,6 +5617,11 @@ function renderHorarios(){
   var diaHoy=diaHoyNombre();
   var mc=document.getElementById('main-content');
   var todas=[];
+  // Puente: igual que en "Mis Clases", el instructorId de cursos/grupos puede
+  // referenciar STATE.instructores[].id (no currentUser.id directo).
+  var maestro=(STATE.instructores||[]).find(function(i){
+    return i.userId===currentUser.id||i.nombre===currentUser.name||i.nombre===currentUser.username;
+  });
 
   (STATE.cursos||[]).forEach(function(c){
     var grupos=(c.grupos&&c.grupos.length)?c.grupos:[{
@@ -5622,7 +5631,8 @@ function renderHorarios(){
     }];
     grupos.forEach(function(g){
       var gInstr=g.instructorId||c.instructorId, gAsist=g.asistenteId||c.asistenteId;
-      var esP=gInstr===uid, esA=gAsist===uid;
+      var esP=gInstr===uid||(maestro&&gInstr===maestro.id);
+      var esA=gAsist===uid||(maestro&&gAsist===maestro.id);
       if(!esP&&!esA) return;
       todas.push({c:c,g:g,esP:esP,esA:esA});
     });
