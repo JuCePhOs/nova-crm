@@ -220,9 +220,9 @@ tr:hover td{background:var(--surface2)}
       <div class="sb-user" id="sb-user"></div>
       <div class="sb-user-sub" id="sb-badge-cont"></div>
       <button class="btn-logout" id="sb-logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i> Cerrar sesión</button>
-      <div style="text-align:center;font-size:9px;color:rgba(255,255,255,.25);margin-top:6px;letter-spacing:.5px">build 2026-06-14·s8</div>
     </div>
   </div>
+  <div style="background:#FFD60A;color:#000;text-align:center;font-weight:800;font-size:13px;padding:7px 0;letter-spacing:1px">⚡ BUILD 2026-06-14 · s8 ⚡</div>
   <div class="main" id="main-content"></div>
 </div>
 <div id="modal-container"></div>
@@ -3208,16 +3208,16 @@ function renderCursoModal(c) {
   }
   function instOptsFn(selected){
     return '<option value="">— Sin instructor —</option>'
-      +(STATE.instructores||[]).filter(function(p){return p.activo!==false;}).map(function(p){
+      +(STATE.instructores||[]).map(function(p){
         return '<option value="'+p.id+'"'+(selected===p.id?' selected':'')+'>'+
-          (p.tipo==='asistente'?'🤝 ':'👨‍🏫 ')+p.nombre+(p.especialidad?' ('+p.especialidad+')':'')+'</option>';
+          (p.tipo==='asistente'?'🤝 ':'👨‍🏫 ')+p.nombre+(p.especialidad?' ('+p.especialidad+')':'')+(p.activo===false?' (inactivo)':'')+'</option>';
       }).join('');
   }
   function asistOptsFn(selected){
     return '<option value="">— Sin asistente —</option>'
-      +(STATE.instructores||[]).filter(function(p){return p.activo!==false;}).map(function(p){
+      +(STATE.instructores||[]).map(function(p){
         return '<option value="'+p.id+'"'+(selected===p.id?' selected':'')+'>'+
-          (p.tipo==='asistente'?'🤝 ':'👨‍🏫 ')+p.nombre+'</option>';
+          (p.tipo==='asistente'?'🤝 ':'👨‍🏫 ')+p.nombre+(p.activo===false?' (inactivo)':'')+'</option>';
       }).join('');
   }
 
@@ -5853,14 +5853,32 @@ async function comenzarClaseHorario(gid, cid, rol){
   renderHorarios();
 }
 
+// Tope: el horario programado del grupo (horarioHasta) para la fecha de la sesión.
+// Si el instructor olvida dar click en Finalizar/Pausar, las horas no se siguen
+// contando más allá de este límite.
+function horarioHastaDeSesion(s){
+  var c=(STATE.cursos||[]).find(function(x){return x.id===s.cursoId;});
+  if(!c) return null;
+  var g=(c.grupos||[]).find(function(x){return x.id===s.grupoId;});
+  var hh=(g&&g.horarioHasta)||c.horarioHasta;
+  if(!hh) return null;
+  var d=new Date(s.fecha+'T'+hh+':00');
+  return isNaN(d.getTime())?null:d;
+}
+function finDeTramoConTope(s){
+  var ahora=new Date();
+  var limite=horarioHastaDeSesion(s);
+  return (limite&&ahora>limite)?limite:ahora;
+}
+
 async function pausarClaseHorario(sesionId, rol){
   var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
   if(!s) return;
   var tramos=rol==='principal'?(s.tramosP||[]):(s.tramosA||[]);
   var tr=tramos[tramos.length-1];
   if(tr&&!tr.fin){
-    tr.fin=new Date().toISOString();
-    tr.horas=(new Date(tr.fin)-new Date(tr.inicio))/3600000;
+    tr.fin=finDeTramoConTope(s).toISOString();
+    tr.horas=Math.max(0,(new Date(tr.fin)-new Date(tr.inicio))/3600000);
     if(rol==='principal') s.horasInstructor=(s.horasInstructor||0)+tr.horas;
     else s.horasAsistente=(s.horasAsistente||0)+tr.horas;
   }
@@ -5892,8 +5910,8 @@ async function finalizarClaseHorario(sesionId, rol){
   var tramos=rol==='principal'?(s.tramosP||[]):(s.tramosA||[]);
   var tr=tramos[tramos.length-1];
   if(tr&&!tr.fin){
-    tr.fin=new Date().toISOString();
-    tr.horas=(new Date(tr.fin)-new Date(tr.inicio))/3600000;
+    tr.fin=finDeTramoConTope(s).toISOString();
+    tr.horas=Math.max(0,(new Date(tr.fin)-new Date(tr.inicio))/3600000);
     if(rol==='principal') s.horasInstructor=(s.horasInstructor||0)+tr.horas;
     else s.horasAsistente=(s.horasAsistente||0)+tr.horas;
   }
