@@ -222,7 +222,6 @@ tr:hover td{background:var(--surface2)}
       <button class="btn-logout" id="sb-logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i> Cerrar sesión</button>
     </div>
   </div>
-  <div style="background:#FFD60A;color:#000;text-align:center;font-weight:800;font-size:13px;padding:7px 0;letter-spacing:1px">⚡ BUILD 2026-06-14 · s8 ⚡</div>
   <div class="main" id="main-content"></div>
 </div>
 <div id="modal-container"></div>
@@ -3286,7 +3285,10 @@ function renderCursoModal(c) {
     +'</select></div>'
 
     // ── Instructor
-    +'<div class="form-group"><label class="flbl">Instructor principal <span style="font-size:10px;color:var(--text3)">(opcional)</span></label>'
+    +'<div class="form-group"><label class="flbl">Instructor principal <span style="font-size:10px;color:var(--text3)">(opcional)</span> '
+      +'<span style="font-size:10px;color:'+((STATE.instructores||[]).length?'var(--text3)':'var(--danger)')+'">'
+      +'— '+(STATE.instructores||[]).length+' instructor'+((STATE.instructores||[]).length===1?'':'es')+' en sistema'
+      +((STATE.instructores||[]).length?'':' (ve a Maestros y agrega uno)')+'</span></label>'
     +'<select id="mc-instructor">'+instOptsFn(c?c.instructorId||'':'')+'</select></div>'
 
     // ── Asistente
@@ -3342,14 +3344,14 @@ function renderGrupoRow(g, idx) {
   }
   function instOpts(sel){
     return '<option value="">— Sin instructor —</option>'
-      +(STATE.instructores||[]).filter(function(p){return p.activo!==false;}).map(function(p){
+      +(STATE.instructores||[]).map(function(p){
         return '<option value="'+p.id+'"'+(sel===p.id?' selected':'')+'>'+
           (p.tipo==='asistente'?'🤝 ':'👨‍🏫 ')+p.nombre+(p.especialidad?' ('+p.especialidad+')':'')+'</option>';
       }).join('');
   }
   function asistOpts(sel){
     return '<option value="">— Sin asistente —</option>'
-      +(STATE.instructores||[]).filter(function(p){return p.activo!==false;}).map(function(p){
+      +(STATE.instructores||[]).map(function(p){
         return '<option value="'+p.id+'"'+(sel===p.id?' selected':'')+'>'+
           (p.tipo==='asistente'?'🤝 ':'👨‍🏫 ')+p.nombre+'</option>';
       }).join('');
@@ -6605,7 +6607,7 @@ function showFormModulo(cursoNombre, grupoId, idx){
   var g = (c.grupos||[]).find(function(x){return x.id===grupoId;});
   var m = idx >= 0 ? g.modulos[idx] : null;
 
-  var instOpts = (STATE.instructores||[]).filter(function(p){return p.activo!==false;}).map(function(p){
+  var instOpts = (STATE.instructores||[]).map(function(p){
     return '<option value="'+p.id+'"'+(m&&m.instructorId===p.id?' selected':'')+'>'+(p.tipo==='asistente'?'🤝 ':'👨‍🏫 ')+p.nombre+'</option>';
   }).join('');
 
