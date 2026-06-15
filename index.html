@@ -220,6 +220,7 @@ tr:hover td{background:var(--surface2)}
       <div class="sb-user" id="sb-user"></div>
       <div class="sb-user-sub" id="sb-badge-cont"></div>
       <button class="btn-logout" id="sb-logout-btn" onclick="doLogout()"><i class="ti ti-logout"></i> Cerrar sesión</button>
+      <div style="text-align:center;font-size:9px;color:rgba(255,255,255,.25);margin-top:6px;letter-spacing:.5px">build 2026-06-14·s8</div>
     </div>
   </div>
   <div class="main" id="main-content"></div>
@@ -1353,6 +1354,23 @@ function cursosQueInicianEnMes(ym) {
 // ════════════════════════════════════════════════
 //  DASHBOARD
 // ════════════════════════════════════════════════
+function debugInstructorInfo(maestro){
+  try{
+    var dump={
+      currentUser:{id:currentUser.id,name:currentUser.name,username:currentUser.username},
+      maestroEncontrado: maestro?{id:maestro.id,nombre:maestro.nombre,userId:maestro.userId||null}:null,
+      cursos:(STATE.cursos||[]).map(function(c){
+        return {nombre:c.nombre,instructorId:c.instructorId,asistenteId:c.asistenteId,
+          grupos:(c.grupos||[]).map(function(g){return {nombre:g.nombre,instructorId:g.instructorId,asistenteId:g.asistenteId};})};
+      })
+    };
+    return '<details style="margin-top:16px;font-size:11px;color:var(--text3)"><summary style="cursor:pointer">🔍 Info de diagnóstico (compártela si sigue vacío)</summary>'
+      +'<pre style="white-space:pre-wrap;background:var(--surface2);padding:10px;border-radius:8px;margin-top:8px;overflow:auto;max-width:100%">'
+      +JSON.stringify(dump,null,2).replace(/</g,'&lt;')
+      +'</pre></details>';
+  }catch(e){return '<div style="font-size:11px;color:var(--text3);margin-top:10px">(debug error: '+String(e&&e.message)+')</div>';}
+}
+
 function renderCursosInstructor(){
   var mc=document.getElementById('main-content');
   if(!mc)return;
@@ -1371,6 +1389,7 @@ function renderCursosInstructor(){
   if(miosCursos.length===0){
     html+='<div class="empty"><div class="empty-icon">📚</div><h3>Sin cursos asignados</h3>'
       +'<p>Solicita al administrador que te asigne como instructor en un curso.</p></div>';
+    html+=debugInstructorInfo(maestro);
     mc.innerHTML=html;return;
   }
   miosCursos.forEach(function(curso){
@@ -5661,6 +5680,7 @@ function renderHorarios(){
   if(todas.length===0){
     html += '<div class="empty"><div class="empty-icon">🗓️</div><h3>Aún no tienes grupos asignados</h3>'
       +'<p>Pídele al administrador que te asigne como instructor o asistente en algún grupo desde la pestaña Cursos.</p></div>';
+    html += debugInstructorInfo(maestro);
   }
 
   mc.innerHTML = html;
