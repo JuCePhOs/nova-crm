@@ -5786,7 +5786,9 @@ function renderRolControls(t, rol, s, modHoy){
   // finalizada
   var horas = rol==='principal' ? (s.horasInstructor||0) : (s.horasAsistente||0);
   return '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">'
-    +'<div style="font-size:11px;font-weight:700;color:var(--accent)">'+label+' · ✓ Finalizada — '+horas.toFixed(2)+' h registradas</div></div>';
+    +'<div style="font-size:11px;font-weight:700;color:var(--accent)">'+label+' · ✓ Finalizada — '+horas.toFixed(2)+' h registradas</div>'
+    +'<div style="margin-top:8px"><button class="btn-ghost btn-sm" onclick="reabrirClaseHorario(\''+s.id+'\',\''+rol+'\')"><i class="ti ti-refresh"></i> Reabrir (seguir registrando hoy)</button></div>'
+    +'</div>';
 }
 
 // ── Lista de asistencia (Asistencia / Retardo / Falta) ─────────────────────
@@ -5918,6 +5920,25 @@ async function finalizarClaseHorario(sesionId, rol){
     else s.horasAsistente=(s.horasAsistente||0)+tr.horas;
   }
   if(rol==='principal') s.estadoP='finalizada'; else s.estadoA='finalizada';
+  await saveState();
+  renderHorarios();
+}
+
+// Permite reabrir una sesión ya finalizada: descuenta el tiempo registrado y
+// limpia los tramos, para poder "Comenzar" de nuevo y seguir sumando horas hoy.
+async function reabrirClaseHorario(sesionId, rol){
+  var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
+  if(!s) return;
+  if(!confirm('¿Reabrir esta sesión de hoy?\n\nSe descontará el tiempo ya registrado y podrás iniciar de nuevo para seguir sumando horas.')) return;
+  var tramos=rol==='principal'?(s.tramosP||[]):(s.tramosA||[]);
+  var sumHoras=tramos.reduce(function(acc,t){return acc+(t.horas||0);},0);
+  if(rol==='principal'){
+    s.horasInstructor=Math.max(0,(s.horasInstructor||0)-sumHoras);
+    s.tramosP=[]; s.estadoP=null;
+  } else {
+    s.horasAsistente=Math.max(0,(s.horasAsistente||0)-sumHoras);
+    s.tramosA=[]; s.estadoA=null;
+  }
   await saveState();
   renderHorarios();
 }
