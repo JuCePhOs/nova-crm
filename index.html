@@ -1166,8 +1166,8 @@ function doLogin(){
   }
   buildSidebar();
 
+  initFirebase(); // SIEMPRE primero: si navigate() lanza, Firebase ya está en marcha
   navigate(currentUser&&currentUser.role==='instructor'?'clases':'dashboard');
-  initFirebase();
 }
 function doLogout(){
   if(db)db.ref('nova_crm').off();
@@ -1687,6 +1687,7 @@ function renderClasesInstructor(){
 }
 
 function renderDashboard(){
+  try{
   const total=STATE.matrículas.length;
   const activosHoy=alumnosActivosEnMes(monthStr()).length;
   const now=new Date();
@@ -1740,7 +1741,7 @@ function renderDashboard(){
     </div>
     <i class="ti ti-chevron-right" style="margin-left:auto;color:var(--text3)"></i>
   </div>`:''}
-  ${(function(){
+  ${(function(){ try{
     var DIAS=[7,5,2,1,0];
     var cans=getPagosAlertasCanceladas();
     var hoy=todayISO();
@@ -1772,7 +1773,7 @@ function renderDashboard(){
     return '<div class="card fade-in" style="border:2px solid #e89c00;margin-bottom:16px">'
       +'<div style="font-size:13px;font-weight:700;color:#e89c00;margin-bottom:12px">🔔 Alertas de cobro ('+alertas.length+')</div>'
       +filas+'</div>';
-  })()}
+  }catch(e){console.error('Dashboard alerts error:',e);return '';} })()}
   ${porCurso.length>0?`
   <div class="card fade-in">
     <div style="font-size:13px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px">${t('dash_por_curso')}</div>
@@ -1784,6 +1785,7 @@ function renderDashboard(){
       <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--accent);min-width:50px;text-align:right">${c.count}${c.cupo?' / '+c.cupo:''}</div>
     </div>`).join('')}
   </div>`:''}`;
+  }catch(e){console.error('renderDashboard error:',e);}
 }
 
 // ════════════════════════════════════════════════
@@ -2005,11 +2007,13 @@ function getSchedulePagos(m, maxMeses){
     .reduce(function(s,p){(p.meses||[]).forEach(function(mes){s[mes]=true;});return s;},{});
   var result=[];
   var startD=new Date(m.fechaISO+'T00:00:00');
+  if(isNaN(startD.getTime())) return []; // fechaISO no válido → no calcular
   var dayOfMonth=startD.getDate();
   for(var i=0;i<maxMeses;i++){
     var d=new Date(startD.getFullYear(), startD.getMonth()+i, dayOfMonth);
     // Clamp a último día del mes si el día no existe
-    if(d.getDate()!==dayOfMonth) d=new Date(d.getFullYear(),d.getMonth()+1,0);
+    if(isNaN(d.getTime())||d.getDate()!==dayOfMonth) d=new Date(d.getFullYear(),d.getMonth()+1,0);
+    if(isNaN(d.getTime())) continue; // skip si sigue inválido
     var fISO=d.toISOString().slice(0,10);
     var mes=fISO.slice(0,7);
     var monto=i===0?(m.primerPago||0):(m.pagoMensual||m.primerPago||0);
