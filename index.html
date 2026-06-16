@@ -6203,6 +6203,7 @@ function renderMaestros(){
       + '<td class="monto-tag" style="color:var(--green)">'+fmtMXN(totalMes)+'</td>'
       + '<td>'+activoBadge+'</td>'
       + (canEdit?'<td style="white-space:nowrap">'
+        + '<button class="btn-ghost btn-sm" style="margin-right:4px" onclick="showModalSesionesInstructor(\''+p.id+'\')"><i class="ti ti-calendar-stats"></i></button>'
         + '<button class="btn-ghost btn-sm" style="margin-right:4px" onclick="showModalInstructor(\''+p.id+'\')"><i class="ti ti-edit"></i></button>'
         + '<button class="btn-ghost btn-sm" style="margin-right:4px" onclick="toggleInstructor(\''+p.id+'\')" title="Activar/Desactivar"><i class="ti ti-power"></i></button>'
         + '<button class="btn-danger btn-sm" onclick="eliminarInstructor(\''+p.id+'\')" title="Eliminar"><i class="ti ti-trash"></i></button>'
@@ -6387,6 +6388,76 @@ async function toggleInstructor(id){
   await saveState();
   renderMaestros();
 }
+async function adminFinalizarSesion(sesionId, rol){
+  var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
+  if(!s)return;
+  var limite=horarioHastaDeSesion(s);
+  var finTime=(limite&&new Date()>limite)?limite:new Date();
+  var campoEstado=rol==='principal'?'estadoP':'estadoA';
+  var campoTramos=rol==='principal'?'tramosP':'tramosA';
+  var campoHoras=rol==='principal'?'horasInstructor':'horasAsistente';
+  var tramos=s[campoTramos]||[];
+  var tr=tramos[tramos.length-1];
+  if(tr&&!tr.fin){
+    tr.fin=finTime.toISOString();
+    tr.horas=Math.max(0,(finTime-new Date(tr.inicio))/3600000);
+    s[campoHoras]=(s[campoHoras]||0)+tr.horas;
+  }
+  s[campoEstado]='finalizada';
+  await saveState();
+  showModalSesionesInstructor(s.instructorId===s.instructorId?s.instructorId:s.asistenteId);
+}
+
+async function adminBorrarSesion(sesionId){
+  if(!confirm('¿Borrar esta sesión y reiniciar sus horas a 0?\n\nSolo borra datos de hoy, no afecta otras fechas.')) return;
+  STATE.sesionesClase=(STATE.sesionesClase||[]).filter(function(x){return x.id!==sesionId;});
+  await saveState();
+  renderMaestros();
+}
+
+function showModalSesionesInstructor(instrId){
+  var p=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
+  if(!p) return;
+  var cm=monthStr();
+  var sesiones=(STATE.sesionesClase||[]).filter(function(s){
+    return s.mes===cm&&(s.instructorId===instrId||s.asistenteId===instrId);
+  });
+  var mc=document.getElementById('modal-container');
+  if(!mc)return;
+  var rows=sesiones.length===0
+    ?'<div style="color:var(--text3);font-size:13px;padding:16px">Sin sesiones este mes.</div>'
+    :sesiones.map(function(s){
+      var esP=s.instructorId===instrId;
+      var est=esP?s.estadoP:s.estadoA;
+      var horas=esP?(s.horasInstructor||0):(s.horasAsistente||0);
+      var c=(STATE.cursos||[]).find(function(x){return x.id===s.cursoId;});
+      var nombre=c?c.nombre:s.cursoId;
+      var col=est==='finalizada'?'var(--green)':est==='iniciada'?'#e89c00':'var(--text3)';
+      var rol2=esP?'principal':'asistente';
+      var finBtn=est==='iniciada'?'<button class="btn-ghost btn-sm" data-sid="'+s.id+'" data-rol="'+rol2+'" onclick="adminFinalizarSesion(this.dataset.sid,this.dataset.rol)" style="font-size:10px">⏹ Finalizar</button>':'';
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">'
+        +'<div style="flex:1"><div style="font-weight:600;font-size:13px">'+nombre+'</div>'
+        +'<div style="font-size:11px;color:var(--text3)">'+s.fecha+' · '+(esP?'Principal':'Asistente')
+        +' · <span style="color:'+col+'">'+( est||'sin iniciar')+'</span></div></div>'
+        +'<div style="font-family:monospace;font-weight:700">'+horas.toFixed(2)+' hrs</div>'
+        +finBtn
+        +'<button class="btn-danger btn-sm" data-sid="'+s.id+'" onclick="adminBorrarSesion(this.dataset.sid)" style="font-size:10px">🗑 Borrar</button>'
+        +'</div>';
+    }).join('');
+
+  mc.innerHTML='<div class="moverlay" style="z-index:9999">'
+    +'<div class="modal" style="max-width:540px;max-height:90vh;overflow-y:auto">'
+    +'<div class="modal-hdr" style="position:sticky;top:0;background:var(--surface);z-index:1">'
+    +'<div class="modal-title">📋 Sesiones del mes — '+p.nombre+'</div>'
+    +'<button class="modal-close" onclick="closeModal()">✕</button></div>'
+    +'<div class="modal-body" style="padding:16px">'
+    +'<div style="font-size:12px;color:var(--text3);margin-bottom:12px">Mes: '+mesLabel(cm)
+    +' · Horas totales: '+(sesiones.reduce(function(sum,s){
+      return sum+(s.instructorId===instrId?(s.horasInstructor||0):(s.horasAsistente||0));
+    },0)).toFixed(2)+' hrs</div>'
+    +rows+'</div></div></div>';
+}
+
 async function eliminarInstructor(id){
   var p = STATE.instructores.find(function(x){return x.id===id;});
   if(!p) return;
@@ -6540,7 +6611,7 @@ function renderPanelInstructor(){
            + (puedeFinalizarBloqueado?'<i class="ti ti-lock"></i> '+finLabel:finLabel)+'</button>';
     } else if(sesion.estado==='pausada'){
       btns = '<button class="btn-primary btn-sm" onclick="reanudarSesion(\''+sesion.id+'\',\''+yoId+'\')">'
-           + '<i class="ti ti-player-play"></i> Reanudar / Nuevo instructor</button> '
+           + '<i class="ti ti-player-play"></i> ▶ Reanudar clase</button> '
            + '<button class="btn-green btn-sm" '+(puedeFinalizarBloqueado?'disabled style="opacity:.5"':'onclick="finalizarSesion(\''+sesion.id+'\')"')+'>'
            + '<i class="ti ti-circle-check"></i> Clase finalizada ✓</button>';
     }
