@@ -1083,6 +1083,15 @@ async function initFirebase(){
     console.error('Firebase auth error:',e);
     var detail=(e.code?e.code+': ':'')+(e.message||String(e));
     setSyncStatus(false,detail);
+    // Mostrar error exacto en pantalla para diagnóstico
+    var errDiv=document.getElementById('firebase-err-banner');
+    if(!errDiv){
+      errDiv=document.createElement('div');
+      errDiv.id='firebase-err-banner';
+      errDiv.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;background:#c0392b;color:#fff;padding:10px 16px;font-size:13px;font-family:monospace;display:flex;gap:12px;align-items:center';
+      document.body.appendChild(errDiv);
+    }
+    errDiv.innerHTML='🔴 Firebase no conecta — Error exacto: <strong>'+detail+'</strong> &nbsp;<button onclick="this.parentElement.remove()" style="background:rgba(255,255,255,.2);border:none;color:#fff;padding:2px 8px;border-radius:4px;cursor:pointer">✕</button>';
   }
 }
 function startRealtimeSync(){
