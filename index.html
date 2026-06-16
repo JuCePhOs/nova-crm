@@ -5771,6 +5771,15 @@ function autoFinalizarSesionesPasadas(){
   var changed=false;
   (STATE.sesionesClase||[]).forEach(function(s){
     var limite=horarioHastaDeSesion(s);
+    // Si no hay horarioHasta programado, cerrar después de 8 horas máximo
+    if(!limite){
+      var primerTrampoInicio=null;
+      ['tramosP','tramosA'].forEach(function(k){(s[k]||[]).forEach(function(t){if(t.inicio&&(!primerTrampoInicio||t.inicio<primerTrampoInicio))primerTrampoInicio=t.inicio;});});
+      if(primerTrampoInicio){
+        var maxFin=new Date(new Date(primerTrampoInicio).getTime()+8*3600000);
+        if(ahora>=maxFin) limite=maxFin;
+      }
+    }
     if(!limite||ahora<=limite) return;
     ['P','A'].forEach(function(rol){
       var campo=rol==='P'?'estadoP':'estadoA';
@@ -6149,14 +6158,19 @@ function renderMaestros(){
   // Build instructor rows
   function horasImpartidas(id){
     var total=0;
+    // Buscar también por userId en caso de que sesiones viejas usen currentUser.id
+    var maestroP=(STATE.instructores||[]).find(function(x){return x.id===id;});
+    var altIds=maestroP&&maestroP.userId?[id,maestroP.userId]:[id];
     (STATE.sesionesClase||[]).forEach(function(s){
       if(s.mes!==cm) return;
-      if(s.instructorId===id && s.estadoP==='finalizada') total+=(s.horasInstructor||0);
-      if(s.asistenteId===id && s.estadoA==='finalizada') total+=(s.horasAsistente||0);
+      var esInstr=altIds.indexOf(s.instructorId)>=0;
+      var esAsist=altIds.indexOf(s.asistenteId)>=0;
+      if(esInstr && s.estadoP==='finalizada') total+=(s.horasInstructor||0);
+      if(esAsist && s.estadoA==='finalizada') total+=(s.horasAsistente||0);
       // compat con filas antiguas (sin estadoP/estadoA)
       if(s.estado==='finalizada'&&!s.estadoP&&!s.estadoA){
-        if(s.instructorId===id) total+=(s.horasInstructor||0);
-        if(s.asistenteId===id) total+=(s.horasAsistente||0);
+        if(esInstr) total+=(s.horasInstructor||0);
+        if(esAsist) total+=(s.horasAsistente||0);
       }
     });
     return total;
@@ -6203,7 +6217,7 @@ function renderMaestros(){
       + '<td class="monto-tag" style="color:var(--green)">'+fmtMXN(totalMes)+'</td>'
       + '<td>'+activoBadge+'</td>'
       + (canEdit?'<td style="white-space:nowrap">'
-        + '<button class="btn-ghost btn-sm" style="margin-right:4px" onclick="showModalSesionesInstructor(\''+p.id+'\')"><i class="ti ti-calendar-stats"></i></button>'
+        + '<button class="btn-ghost btn-sm" style="margin-right:4px" title="Ver sesiones del mes" onclick="showModalSesionesInstructor(\''+p.id+'\')"><i class="ti ti-calendar-stats"></i></button>'
         + '<button class="btn-ghost btn-sm" style="margin-right:4px" onclick="showModalInstructor(\''+p.id+'\')"><i class="ti ti-edit"></i></button>'
         + '<button class="btn-ghost btn-sm" style="margin-right:4px" onclick="toggleInstructor(\''+p.id+'\')" title="Activar/Desactivar"><i class="ti ti-power"></i></button>'
         + '<button class="btn-danger btn-sm" onclick="eliminarInstructor(\''+p.id+'\')" title="Eliminar"><i class="ti ti-trash"></i></button>'
@@ -6405,7 +6419,7 @@ async function adminFinalizarSesion(sesionId, rol){
   }
   s[campoEstado]='finalizada';
   await saveState();
-  showModalSesionesInstructor(s.instructorId===s.instructorId?s.instructorId:s.asistenteId);
+  showModalSesionesInstructor(instrId);
 }
 
 async function adminBorrarSesion(sesionId){
@@ -7061,6 +7075,13 @@ function closeModal(){document.getElementById('modal-container').innerHTML='';}
   await loadState();
   setSyncStatus(false);
 })();
+// Comprueba cada minuto si alguna sesión debe cerrarse automáticamente
+setInterval(function(){
+  if(currentUser){
+    autoFinalizarSesionesPasadas();
+    if(currentTab==='clases'||currentTab==='maestros') refreshCurrentView();
+  }
+}, 60000);
 window.addEventListener('load', function(){
   updateLangButtons();
   applyLoginLang();
