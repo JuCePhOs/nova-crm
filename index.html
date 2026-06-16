@@ -1529,7 +1529,7 @@ function showFichaAlumno(folio){
         +'</tr>';
     }).join('');
     var content=
-      '<div class="moverlay" onclick="if(event.target===this)closeModal()" style="z-index:9999">'
+      '<div class="moverlay" style="z-index:9999">'
       +'<div class="modal" style="max-width:600px;max-height:90vh;overflow-y:auto">'
       +'<div class="modal-hdr" style="position:sticky;top:0;background:var(--surface);z-index:1">'
       +'<div class="modal-title"><i class="ti ti-id-badge-2"></i> Ficha del Alumno</div>'
@@ -1564,6 +1564,35 @@ function showFichaAlumno(folio){
       +'</tr></thead>'
       +'<tbody>'+rows+'</tbody></table></div>'
       +(first.notas?'<div style="margin-top:12px;font-size:12px;padding:10px 12px;background:var(--surface2);border-radius:8px"><strong>Notas:</strong> '+(first.notas||'')+'</div>':'')
+      // Plan de pagos por matrícula
+      +(function(){
+        var cans=getPagosAlertasCanceladas();
+        return mats.map(function(mat){
+          var sched=getSchedulePagos(mat,12);
+          if(!sched.length) return '';
+          var pagoMens=mat.pagoMensual&&mat.pagoMensual!==mat.primerPago?
+            '<span style="color:var(--text3);font-size:11px"> · Pago mensual: $'+(mat.pagoMensual||0).toLocaleString('es-MX')+'</span>':'';
+          var filas=sched.map(function(s){
+            var cancelada=!!cans[mat.folio+'_'+s.mes];
+            var hoy=todayISO();
+            var diff=Math.round((new Date(s.fechaISO)-new Date(hoy))/86400000);
+            var estadoColor=s.pagado?'var(--green)':cancelada?'var(--text2)':diff<0?'var(--danger)':diff<=7?'#e89c00':'var(--text2)';
+            var estadoLbl=s.pagado?'✓ Pagado':cancelada?'✓ Cobrado':diff<0?'⚠️ Vencido':diff===0?'📅 Hoy':diff<=7?'⏰ En '+diff+' d.':'';
+            return '<tr style="border-bottom:1px solid var(--border)">'
+              +'<td style="padding:5px 8px;font-size:12px;color:var(--text3)">Pago #'+s.num+'</td>'
+              +'<td style="padding:5px 8px;font-size:12px">'+s.fechaISO+'</td>'
+              +'<td style="padding:5px 8px;font-size:12px;font-family:monospace">$'+s.monto.toLocaleString('es-MX')+'</td>'
+              +'<td style="padding:5px 8px;font-size:12px;color:'+estadoColor+'">'+estadoLbl+'</td>'
+              +(!s.pagado&&!cancelada&&diff<=7?'<td style="padding:5px 8px"><button onclick="marcarAlertaCancelada('+mat.folio+',\''+s.mes+'\')" style="font-size:10px;padding:3px 8px;background:var(--green);color:#fff;border:none;border-radius:5px;cursor:pointer">✓ Pago realizado</button></td>':'<td></td>')
+              +'</tr>';
+          }).join('');
+          return '<div style="margin-top:16px">'
+            +'<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;margin-bottom:8px">💳 Plan de pagos — #'+mat.folio+' '+mat.curso+pagoMens+'</div>'
+            +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
+            +'<thead><tr style="background:var(--surface2)"><th style="padding:5px 8px;text-align:left;font-size:11px">#</th><th style="padding:5px 8px;text-align:left;font-size:11px">Fecha</th><th style="padding:5px 8px;text-align:left;font-size:11px">Monto</th><th style="padding:5px 8px;text-align:left;font-size:11px">Estado</th><th></th></tr></thead>'
+            +'<tbody>'+filas+'</tbody></table></div></div>';
+        }).join('');
+      })()
       +'</div></div></div>';
     mc.innerHTML=content;
   }catch(err){
@@ -1582,7 +1611,7 @@ function showFichaInactivo(id){
       return '<tr><td style="padding:6px"><span class="badge badge-neutral">'+c+'</span></td></tr>';
     }).join('');
     mc.innerHTML=
-      '<div class="moverlay" onclick="if(event.target===this)closeModal()" style="z-index:9999">'
+      '<div class="moverlay" style="z-index:9999">'
       +'<div class="modal" style="max-width:480px">'
       +'<div class="modal-hdr"><div class="modal-title"><i class="ti ti-id-badge-2"></i> Ficha Ex-Alumno</div>'
       +'<button class="modal-close" onclick="closeModal()" style="background:none;border:none;cursor:pointer;font-size:18px">✕</button></div>'
@@ -1711,6 +1740,39 @@ function renderDashboard(){
     </div>
     <i class="ti ti-chevron-right" style="margin-left:auto;color:var(--text3)"></i>
   </div>`:''}
+  ${(function(){
+    var DIAS=[7,5,2,1,0];
+    var cans=getPagosAlertasCanceladas();
+    var hoy=todayISO();
+    var alertas=[];
+    (STATE.matrículas||[]).forEach(function(m){
+      var sched=getSchedulePagos(m,12);
+      sched.forEach(function(s){
+        if(s.pagado) return;
+        if(cans[m.folio+'_'+s.mes]) return;
+        var diff=Math.round((new Date(s.fechaISO)-new Date(hoy))/86400000);
+        if(diff>=0&&diff<=7) alertas.push({m,s,diff});
+        else if(diff<0&&diff>=-3) alertas.push({m,s,diff}); // hasta 3 días vencidos
+      });
+    });
+    if(!alertas.length) return '';
+    var filas=alertas.sort(function(a,b){return a.diff-b.diff;}).map(function(x){
+      var color=x.diff<0?'var(--danger)':x.diff===0?'#e89c00':x.diff<=2?'#e89c00':'var(--text2)';
+      var lbl=x.diff<0?'⚠️ Vencido hace '+Math.abs(x.diff)+' d.':x.diff===0?'📅 ¡Hoy!':'⏰ En '+x.diff+' día'+(x.diff!==1?'s':'');
+      return '<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">'
+        +'<div style="flex:1;min-width:180px">'
+        +'<div style="font-weight:600;font-size:13px">'+x.m.alumno+'</div>'
+        +'<div style="font-size:11px;color:var(--text3)">'+x.m.curso+' · '+x.s.fechaISO+' · Pago #'+x.s.num+'</div>'
+        +'</div>'
+        +'<div style="font-family:monospace;font-weight:700;font-size:15px">$'+(x.s.monto||0).toLocaleString('es-MX')+'</div>'
+        +'<div style="font-size:12px;font-weight:600;color:'+color+'">'+lbl+'</div>'
+        +'<button data-f="'+x.m.folio+'" data-m="'+x.s.mes+'" onclick="marcarAlertaCancelada(parseInt(this.dataset.f),this.dataset.m)" style="font-size:11px;padding:4px 10px;background:#10C98A;color:#fff;border:none;border-radius:6px;cursor:pointer">✓ Pago realizado</button>'
+        +'</div>';
+    }).join('');
+    return '<div class="card fade-in" style="border:2px solid #e89c00;margin-bottom:16px">'
+      +'<div style="font-size:13px;font-weight:700;color:#e89c00;margin-bottom:12px">🔔 Alertas de cobro ('+alertas.length+')</div>'
+      +filas+'</div>';
+  })()}
   ${porCurso.length>0?`
   <div class="card fade-in">
     <div style="font-size:13px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px">${t('dash_por_curso')}</div>
@@ -1827,7 +1889,7 @@ function showModalNuevaMatricula(){
   var RS='display:grid;grid-template-columns:1fr auto;align-items:center;gap:10px;padding:10px 13px;border:2px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;width:100%;box-sizing:border-box;background:var(--surface)';
 
   document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-file-plus"></i> ${t('mat_nueva_titulo')}</div>
@@ -1864,8 +1926,12 @@ function showModalNuevaMatricula(){
           <input type="tel" id="f-tel" placeholder="55 1234 5678">
         </div>
         <div class="form-group">
-          <label class="flbl">${t('mat_campo_pago')}</label>
+          <label class="flbl">${t('mat_campo_pago')} <span style="font-size:10px;color:var(--text3)">(primer pago)</span></label>
           <input type="number" id="f-pago" min="0" placeholder="0.00" oninput="updateFirstPaymentStatus()">
+        </div>
+        <div class="form-group">
+          <label class="flbl">Pago mensual subsiguiente <span style="font-size:10px;color:var(--text3)">(2°, 3°… mes)</span></label>
+          <input type="number" id="f-pago-mensual" min="0" placeholder="Igual al primer pago si vacío">
         </div>
         <div class="form-group span2" id="f-pago-status-cont">
           <label class="flbl">Estado del primer pago</label>
@@ -1928,6 +1994,41 @@ function mostrarPanelDescargaContratos(folios, nombres){
     +'<button class="btn-ghost" onclick="closeModal()" style="width:100%"><i class="ti ti-x"></i> Cerrar ventana</button>'
     +'</div></div></div>';
 }
+// ─── Calendario de pagos ──────────────────────────────────────────────────────
+// Devuelve un array de {fechaISO, mes, pagado, monto} para cada mensualidad
+// esperada de una matrícula, empezando desde su fecha de inicio.
+function getSchedulePagos(m, maxMeses){
+  if(!m||!m.fechaISO) return [];
+  maxMeses=maxMeses||6;
+  var pagados=(STATE.pagosRegulares||[])
+    .filter(function(p){return p.crmFolio==m.folio||(p.paqueteFolios&&p.paqueteFolios.indexOf(m.folio)>=0);})
+    .reduce(function(s,p){(p.meses||[]).forEach(function(mes){s[mes]=true;});return s;},{});
+  var result=[];
+  var startD=new Date(m.fechaISO+'T00:00:00');
+  var dayOfMonth=startD.getDate();
+  for(var i=0;i<maxMeses;i++){
+    var d=new Date(startD.getFullYear(), startD.getMonth()+i, dayOfMonth);
+    // Clamp a último día del mes si el día no existe
+    if(d.getDate()!==dayOfMonth) d=new Date(d.getFullYear(),d.getMonth()+1,0);
+    var fISO=d.toISOString().slice(0,10);
+    var mes=fISO.slice(0,7);
+    var monto=i===0?(m.primerPago||0):(m.pagoMensual||m.primerPago||0);
+    result.push({fechaISO:fISO, mes, pagado:!!pagados[mes], monto, num:i+1});
+  }
+  return result;
+}
+
+// Alerta de pago cancelada (ya cobrado) — key: folio+'_'+mes
+function getPagosAlertasCanceladas(){
+  return STATE.alertasCanceladas||{};
+}
+async function marcarAlertaCancelada(folio, mes){
+  if(!STATE.alertasCanceladas) STATE.alertasCanceladas={};
+  STATE.alertasCanceladas[folio+'_'+mes]={at:new Date().toISOString(),por:currentUser.username};
+  await saveState();
+  renderDashboard();
+}
+
 async function guardarMatricula(){
   const alumno=document.getElementById('f-alumno').value.trim();
   const nac=document.getElementById('f-nac').value;
@@ -1936,6 +2037,8 @@ async function guardarMatricula(){
   const email=document.getElementById('f-email').value.trim();
   const tel=document.getElementById('f-tel').value.trim();
   const pago=document.getElementById('f-pago').value;
+  const pagoMensualRaw=document.getElementById('f-pago-mensual');
+  const pagoMensualVal=pagoMensualRaw?parseFloat(pagoMensualRaw.value)||null:null;
   const fechaEl=document.getElementById('f-fecha');
   const fechaISO=fechaEl?fechaEl.value:todayISO();
   const notas=(document.getElementById('f-notas')||{value:''}).value;
@@ -1969,8 +2072,10 @@ async function guardarMatricula(){
     return;
   }
   const folio=STATE.nextFolio++;
+  const pagoMensualFinal=pagoMensualVal||parseFloat(pago)||0;
   STATE.matrículas.push({folio,alumno,nacimiento:nac,curso,titular,email,telefono:tel,
-    primerPago:parseFloat(pago),fecha:fmtFecha(fechaISO),fechaISO,notas,
+    primerPago:parseFloat(pago),pagoMensual:pagoMensualFinal,
+    fecha:fmtFecha(fechaISO),fechaISO,notas,
     createdAt:new Date().toISOString(),createdBy:currentUser.username});
   // Auto-register first payment if already paid
   var pagoStatusEl=document.querySelector('input[name="f-pago-status"]:checked');
@@ -1997,7 +2102,7 @@ function showModalEditarMatricula(folio){
   const m=STATE.matrículas.find(x=>x.folio===folio);
   if(!m)return;
   document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal">
     <div class="modal-hdr"><div class="modal-title"><i class="ti ti-edit"></i> ${t('mat_editar_titulo')} #${folio}</div><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
@@ -3225,7 +3330,7 @@ function renderCursoModal(c) {
   });
   var grupoRows = _modalGrupos.map(function(g,i){ return renderGrupoRow(g,i); }).join('');
 
-  var h = '<div class="moverlay" onclick="if(event.target===this)closeModal()">'
+  var h = '<div class="moverlay">'
     +'<div class="modal" style="max-width:700px">'
     +'<div class="modal-hdr"><div class="modal-title"><i class="ti ti-'+(isEdit?'edit':'book-plus')+'"></i> '
     +(isEdit?t('cur_editar_titulo')+': '+c.nombre:t('cur_nuevo_titulo'))+'</div>'
@@ -3634,7 +3739,7 @@ function renderUsuarios(){
 
 function showModalNuevoUsuario(){
   document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:540px">
+  <div class="moverlay"><div class="modal" style="max-width:540px">
     <div class="modal-hdr"><div class="modal-title"><i class="ti ti-user-plus"></i> ${t('usr_nuevo_titulo')}</div><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div class="form-grid">
@@ -3696,7 +3801,7 @@ function showModalEditarUsuario(id){
   if(!u)return;
   const rl={admin:'Administrador',recepcionista:'Recepcionista',instructor:'Instructor'};
   document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:540px">
+  <div class="moverlay"><div class="modal" style="max-width:540px">
     <div class="modal-hdr"><div class="modal-title"><i class="ti ti-edit"></i> Editar Usuario: ${u.name}</div><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div class="form-grid">
@@ -3933,7 +4038,7 @@ let impWB = null, impFmt = 'multihoja', impCols = [], impSheets = [];
 function showModalImportar() {
   impWB = null; impFmt = 'multihoja'; impCols = []; impSheets = [];
   document.getElementById('modal-container').innerHTML = `
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal" style="max-width:700px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-file-import"></i> ${t('imp_titulo')}</div>
@@ -4337,7 +4442,7 @@ function confirmarBajaAlumno(folio) {
   const m = STATE.matrículas.find(x=>x.folio===folio);
   if(!m) return;
   document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal" style="max-width:520px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-user-off"></i> ${t('baja_titulo')}: ${m.alumno}</div>
@@ -5022,7 +5127,7 @@ async function recuperarCursos(){
   if(missing.size===0){ alert('✅ No hay cursos faltantes. Todos los cursos de las matrículas ya existen.'); return; }
   const lista=[...missing].sort();
   document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal" style="max-width:500px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-restore"></i> Recuperar cursos borrados</div>
@@ -5143,7 +5248,7 @@ function showModalEditarPromo(id){
   }
   const multiselect = buildPromoCursosPanel('ep', p.cursosAplicables||'todos');
   document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal" style="max-width:580px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-pencil"></i> Editar Promoción</div>
@@ -5201,7 +5306,7 @@ function showModalInfoPromo(id){
       return s;
     }).join('<br>');
   document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal" style="max-width:520px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-tag"></i> ${p.nombre}</div>
@@ -5276,7 +5381,7 @@ function showDetallesPromo(id){
     :p.cursosAplicables.split(',').map(s=>s.split('|')[0]).filter((v,i,a)=>a.indexOf(v)===i).join(', ');
 
   document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal" style="max-width:500px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-tag"></i> ${p.nombre}</div>
@@ -6120,7 +6225,7 @@ function showModalInstructor(id){
   var p = id ? STATE.instructores.find(function(x){return x.id===id;}) : null;
   var isEdit = !!p;
   document.getElementById('modal-container').innerHTML = `
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal" style="max-width:520px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-${isEdit?'edit':'user-plus'}"></i> ${isEdit?'Editar instructor':'Nuevo instructor'}</div>
@@ -6408,7 +6513,7 @@ function iniciarSesion(moduloId, cursoId, grupoId, instructorId){
   var puedeSerPrincipal = !yaPrincipal;
 
   document.getElementById('modal-container').innerHTML = `
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal" style="max-width:420px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-player-play"></i> Iniciar sesión de clase</div>
@@ -6603,7 +6708,7 @@ function showModalModulos(cursoNombre, grupoId){
   }
 
   document.getElementById('modal-container').innerHTML = `
-  <div class="moverlay" onclick="if(event.target===this)closeModal()">
+  <div class="moverlay">
   <div class="modal" style="max-width:620px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-list-details"></i> Módulos — ${g.nombre||c.nombre}</div>
