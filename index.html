@@ -6157,23 +6157,21 @@ function renderMaestros(){
 
   // Build instructor rows
   function horasImpartidas(id){
-    var total=0;
-    // Buscar también por userId en caso de que sesiones viejas usen currentUser.id
+    var hP=0, hA=0;
     var maestroP=(STATE.instructores||[]).find(function(x){return x.id===id;});
     var altIds=maestroP&&maestroP.userId?[id,maestroP.userId]:[id];
     (STATE.sesionesClase||[]).forEach(function(s){
       if(s.mes!==cm) return;
       var esInstr=altIds.indexOf(s.instructorId)>=0;
       var esAsist=altIds.indexOf(s.asistenteId)>=0;
-      if(esInstr && s.estadoP==='finalizada') total+=(s.horasInstructor||0);
-      if(esAsist && s.estadoA==='finalizada') total+=(s.horasAsistente||0);
-      // compat con filas antiguas (sin estadoP/estadoA)
+      if(esInstr && s.estadoP==='finalizada') hP+=(s.horasInstructor||0);
+      if(esAsist && s.estadoA==='finalizada') hA+=(s.horasAsistente||0);
       if(s.estado==='finalizada'&&!s.estadoP&&!s.estadoA){
-        if(esInstr) total+=(s.horasInstructor||0);
-        if(esAsist) total+=(s.horasAsistente||0);
+        if(esInstr) hP+=(s.horasInstructor||0);
+        if(esAsist) hA+=(s.horasAsistente||0);
       }
     });
-    return total;
+    return {hPrincipal:hP, hAsistente:hA, total:hP+hA};
   }
 
   function horasPlaneadas(id){
@@ -6194,9 +6192,9 @@ function renderMaestros(){
   }
 
   var rows = inst.map(function(p){
-    var hImp = horasImpartidas(p.id);
-    var hPlan = horasPlaneadas(p.id);
-    var totalMes = +(hImp * p.tarifaHora).toFixed(2);
+    var _hObj=horasImpartidas(p.id); var hImp=_hObj.total; var hPlan=horasPlaneadas(p.id);
+    var tarifaA=p.tarifaHoraAsistente||p.tarifaHora;
+    var totalMes=+(_hObj.hPrincipal*(p.tarifaHora||0)+_hObj.hAsistente*(tarifaA||0)).toFixed(2);
     var tipoBadge = p.tipo==='asistente'
       ? '<span style="background:rgba(107,45,146,.1);color:var(--accent);border-radius:4px;padding:1px 7px;font-size:11px">Asistente</span>'
       : '<span style="background:rgba(16,185,129,.1);color:var(--green);border-radius:4px;padding:1px 7px;font-size:11px">Instructor</span>';
@@ -6226,7 +6224,7 @@ function renderMaestros(){
   }).join('');
 
   var totalAPagar = inst.reduce(function(acc,p){
-    return acc + horasImpartidas(p.id) * p.tarifaHora;
+    var _o=horasImpartidas(p.id);var ta=p.tarifaHoraAsistente||p.tarifaHora; return acc+_o.hPrincipal*(p.tarifaHora||0)+_o.hAsistente*(ta||0);
   }, 0);
   var totalPlaneado = inst.reduce(function(acc,p){
     return acc + horasPlaneadas(p.id) * p.tarifaHora;
@@ -6243,7 +6241,7 @@ function renderMaestros(){
     // Summary cards
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px">'
     + statsCard('Instructores activos', inst.filter(function(p){return p.activo!==false;}).length, '')
-    + statsCard('Horas impartidas '+mesLabel(cm), inst.reduce(function(a,p){return a+horasImpartidas(p.id);},0).toFixed(1)+' hrs', 'var(--accent)')
+    + statsCard('Horas impartidas '+mesLabel(cm), inst.reduce(function(a,p){return a+horasImpartidas(p.id).total;},0).toFixed(1)+' hrs', 'var(--accent)')
     + statsCard('A pagar este mes', fmtMXN(totalAPagar), 'var(--green)')
     + statsCard('Presupuesto planeado', fmtMXN(totalPlaneado), 'var(--text2)')
     + '</div>'
@@ -6361,6 +6359,7 @@ function showModalInstructor(id){
 async function guardarInstructor(id){
   var nombre = document.getElementById('mi-nombre')?.value?.trim();
   var tarifa = parseFloat(document.getElementById('mi-tarifa')?.value||'0');
+  var tarifaAsist = parseFloat(document.getElementById('mi-tarifa-asist')?.value||'0')||null;
   if(!nombre){ alert('El nombre es obligatorio.'); return; }
   if(!tarifa||tarifa<=0){ alert('La tarifa por hora es obligatoria.'); return; }
 
@@ -6433,42 +6432,70 @@ function showModalSesionesInstructor(instrId){
   var p=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
   if(!p) return;
   var cm=monthStr();
+  var altId=p.userId||'__none__';
   var sesiones=(STATE.sesionesClase||[]).filter(function(s){
-    return s.mes===cm&&(s.instructorId===instrId||s.asistenteId===instrId);
+    return s.mes===cm&&(s.instructorId===instrId||s.asistenteId===instrId
+      ||s.instructorId===altId||s.asistenteId===altId);
   });
   var mc=document.getElementById('modal-container');
   if(!mc)return;
+  function fmtHora(iso){if(!iso)return '?';var d=new Date(iso);return d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});}
+  var totalHoras=0;
   var rows=sesiones.length===0
-    ?'<div style="color:var(--text3);font-size:13px;padding:16px">Sin sesiones este mes.</div>'
+    ?'<div style="color:var(--text3);padding:16px">Sin sesiones este mes.</div>'
     :sesiones.map(function(s){
-      var esP=s.instructorId===instrId;
+      var esP=s.instructorId===instrId||s.instructorId===altId;
       var est=esP?s.estadoP:s.estadoA;
       var horas=esP?(s.horasInstructor||0):(s.horasAsistente||0);
+      totalHoras+=horas;
       var c=(STATE.cursos||[]).find(function(x){return x.id===s.cursoId;});
-      var nombre=c?c.nombre:s.cursoId;
+      var nombre=c?c.nombre:(s.cursoId||'Sin nombre');
       var col=est==='finalizada'?'var(--green)':est==='iniciada'?'#e89c00':'var(--text3)';
       var rol2=esP?'principal':'asistente';
-      var finBtn=est==='iniciada'?'<button class="btn-ghost btn-sm" data-sid="'+s.id+'" data-rol="'+rol2+'" onclick="adminFinalizarSesion(this.dataset.sid,this.dataset.rol)" style="font-size:10px">⏹ Finalizar</button>':'';
-      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">'
-        +'<div style="flex:1"><div style="font-weight:600;font-size:13px">'+nombre+'</div>'
+      var tramos=esP?(s.tramosP||[]):(s.tramosA||[]);
+      var tramosHtml=tramos.length===0
+        ?'<div style="font-size:11px;color:var(--text3)">Sin tramos</div>'
+        :tramos.map(function(tr,ti){
+          var durH=(tr.horas||0).toFixed(2);
+          var ini=fmtHora(tr.inicio); var fin2=tr.fin?fmtHora(tr.fin):'en curso';
+          var sid=s.id; var r2=rol2;
+          return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px;border-bottom:1px dashed var(--border)">'
+            +'<span style="color:var(--text2);font-family:monospace;min-width:130px">'+ini+' → '+fin2+'</span>'
+            +'<span style="font-weight:700;font-family:monospace;color:var(--accent)">'+durH+' h</span>'
+            +'<button style="font-size:10px;padding:1px 6px;background:none;border:1px solid var(--border);border-radius:4px;cursor:pointer"'
+            +' data-sid="'+sid+'" data-iid="'+instrId+'" data-rol="'+r2+'" data-ti="'+ti+'"'
+            +' onclick="adminEditarHorasTramo(this.dataset.sid,this.dataset.iid,this.dataset.rol,parseInt(this.dataset.ti))">✏️</button>'
+            +'<button style="font-size:10px;padding:1px 6px;background:none;border:1px solid #f5c0bb;color:var(--danger);border-radius:4px;cursor:pointer"'
+            +' data-sid="'+sid+'" data-iid="'+instrId+'" data-rol="'+r2+'" data-ti="'+ti+'"'
+            +' onclick="adminBorrarTramo(this.dataset.sid,this.dataset.iid,this.dataset.rol,parseInt(this.dataset.ti))">🗑</button>'
+            +'</div>';
+        }).join('');
+      var finBtn=est==='iniciada'
+        ?'<button class="btn-ghost btn-sm" data-sid="'+s.id+'" data-rol="'+rol2+'" onclick="adminFinalizarSesion(this.dataset.sid,this.dataset.rol)" style="font-size:10px">⏹ Finalizar</button>':'';
+      return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">'
+        +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">'
+        +'<div style="flex:1"><div style="font-weight:700;font-size:13px">'+nombre+'</div>'
         +'<div style="font-size:11px;color:var(--text3)">'+s.fecha+' · '+(esP?'Principal':'Asistente')
         +' · <span style="color:'+col+'">'+( est||'sin iniciar')+'</span></div></div>'
-        +'<div style="font-family:monospace;font-weight:700">'+horas.toFixed(2)+' hrs</div>'
+        +'<div style="font-family:monospace;font-weight:700;color:var(--green)">'+horas.toFixed(2)+' h</div>'
         +finBtn
-        +'<button class="btn-danger btn-sm" data-sid="'+s.id+'" onclick="adminBorrarSesion(this.dataset.sid)" style="font-size:10px">🗑 Borrar</button>'
+        +'<button class="btn-danger btn-sm" data-sid="'+s.id+'" data-iid="'+instrId+'" data-rol="'+rol2+'"'
+        +' onclick="adminBorrarSesion(this.dataset.sid,this.dataset.iid,this.dataset.rol)" style="font-size:10px">🗑 Borrar día</button>'
+        +'</div>'
+        +'<div>'+tramosHtml+'</div>'
         +'</div>';
     }).join('');
-
   mc.innerHTML='<div class="moverlay" style="z-index:9999">'
-    +'<div class="modal" style="max-width:540px;max-height:90vh;overflow-y:auto">'
+    +'<div class="modal" style="max-width:580px;max-height:90vh;overflow-y:auto">'
     +'<div class="modal-hdr" style="position:sticky;top:0;background:var(--surface);z-index:1">'
-    +'<div class="modal-title">📋 Sesiones del mes — '+p.nombre+'</div>'
+    +'<div class="modal-title">📅 Sesiones — '+p.nombre+'</div>'
     +'<button class="modal-close" onclick="closeModal()">✕</button></div>'
     +'<div class="modal-body" style="padding:16px">'
-    +'<div style="font-size:12px;color:var(--text3);margin-bottom:12px">Mes: '+mesLabel(cm)
-    +' · Horas totales: '+(sesiones.reduce(function(sum,s){
-      return sum+(s.instructorId===instrId?(s.horasInstructor||0):(s.horasAsistente||0));
-    },0)).toFixed(2)+' hrs</div>'
+    +'<div style="font-size:12px;color:var(--text3);margin-bottom:10px">'
+    +'⏱ Total: <strong style="color:var(--green)">'+totalHoras.toFixed(2)+' h</strong>'
+    +' · '+sesiones.length+' sesión'+(sesiones.length!==1?'es':'')+'</div>'
+    +'<div style="font-size:10px;color:var(--text3);margin-bottom:12px">'
+    +'✏️ editar horas · 🗑 borrar tramo · 🗑 Borrar día = reiniciar sesión completa</div>'
     +rows+'</div></div></div>';
 }
 
