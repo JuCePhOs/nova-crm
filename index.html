@@ -1121,6 +1121,7 @@ async function loadState(){
   if(!STATE.alumnosInactivos)STATE.alumnosInactivos=[];
   if(STATE.semidiosActivo===undefined)STATE.semidiosActivo=false;
   if(!STATE.solicitudesStack)STATE.solicitudesStack=[];
+  if(!STATE.autorizacionesPago)STATE.autorizacionesPago=[];
   if(!STATE.instructores)STATE.instructores=[];
   if(!STATE.sesionesClase)STATE.sesionesClase=[];
   if(!STATE.pagosGastosMaestros)STATE.pagosGastosMaestros=[];
@@ -1202,7 +1203,7 @@ function buildSidebar(){
     {id:'inactivos',icon:'ti-user-off',label:t('nav_inactivos'),perm:'ver_alumnos',badge:(STATE.alumnosInactivos||[]).length||null},
   {id:'clases',icon:'ti-calendar-event',label:'Mis Clases',perm:null,showFn:function(){return currentUser&&currentUser.role==='instructor';}},
   {id:'cursos_inst',icon:'ti-notebook',label:'Mis Cursos',perm:null,showFn:function(){return currentUser&&currentUser.role==='instructor';}},
-  {id:'dios',icon:'ti-tag',label:t('nav_dios'),perm:'ver_pagos',badge:((STATE.promociones||[]).filter(p=>p.estado==='pendiente').length+(STATE.solicitudesStack||[]).filter(s=>s.estado==='pendiente').length)||null},
+  {id:'dios',icon:'ti-tag',label:t('nav_dios'),perm:'ver_pagos',badge:((STATE.promociones||[]).filter(p=>p.estado==='pendiente').length+(STATE.solicitudesStack||[]).filter(s=>s.estado==='pendiente').length+(STATE.autorizacionesPago||[]).filter(a=>a.estado==='pendiente').length)||null},
   ];
   const logoutBtn=document.getElementById('sb-logout-btn');
   if(logoutBtn)logoutBtn.innerHTML='<i class="ti ti-logout"></i> '+t('nav_salir');
@@ -1581,6 +1582,14 @@ function showFichaAlumno(folio){
           if(!sched.length) return '';
           var pagoMens=mat.pagoMensual&&mat.pagoMensual!==mat.primerPago?
             '<span style="color:var(--text3);font-size:11px"> · Pago mensual: $'+(mat.pagoMensual||0).toLocaleString('es-MX')+'</span>':'';
+          var grupoInfo='';
+          if(mat.grupoId){
+            var _co=(STATE.cursos||[]).find(function(c){return (c.grupos||[]).some(function(g){return g.id===mat.grupoId;});});
+            var _go=_co?_co.grupos.find(function(g){return g.id===mat.grupoId;}):null;
+            if(_go&&_go.fechaInicio){
+              grupoInfo='<span style="color:var(--text3);font-size:11px"> · 🗓 Grupo: '+_go.fechaInicio+(_go.fechaFin?' → '+_go.fechaFin:'')+' (pago único)</span>';
+            }
+          }
           var filas=sched.map(function(s){
             var cancelada=!!cans[mat.folio+'_'+s.mes];
             var hoy=todayISO();
@@ -1596,7 +1605,7 @@ function showFichaAlumno(folio){
               +'</tr>';
           }).join('');
           return '<div style="margin-top:16px">'
-            +'<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;margin-bottom:8px">💳 Plan de pagos — #'+mat.folio+' '+mat.curso+pagoMens+'</div>'
+            +'<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;margin-bottom:8px">💳 Plan de pagos — #'+mat.folio+' '+mat.curso+pagoMens+grupoInfo+'</div>'
             +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
             +'<thead><tr style="background:var(--surface2)"><th style="padding:5px 8px;text-align:left;font-size:11px">#</th><th style="padding:5px 8px;text-align:left;font-size:11px">Fecha</th><th style="padding:5px 8px;text-align:left;font-size:11px">Monto</th><th style="padding:5px 8px;text-align:left;font-size:11px">Estado</th><th></th></tr></thead>'
             +'<tbody>'+filas+'</tbody></table></div></div>';
@@ -1834,7 +1843,7 @@ function renderMatriculas(){
         <td><div style="font-weight:600">${m.alumno}</div><div style="font-size:11px;color:var(--text3)">${m.email||''}</div></td>
         <td>${m.titular}</td>
         <td><span class="badge badge-admin">${m.curso}</span></td>
-        <td><span class="monto-tag">${fmtMXN(parseFloat(String(m.primerPago||0).replace(/[^0-9.]/g,'')))}</span></td>
+        <td><span class="monto-tag">${fmtMXN(parseFloat(String(m.primerPago||0).replace(/[^0-9.]/g,'')))}</span>${m.autorizacionPendiente?`<div style="font-size:10px;color:var(--danger);font-weight:700;margin-top:2px">⚠ Pendiente autorización</div>`:''}</td>
         <td style="font-size:12px;color:var(--text2)">${m.fecha||'—'}</td>
         <td style="font-size:12px;color:var(--text2)">${(function(){var e=calcEdad(m.nacimiento);return e!==null?e+' años':'—';})()}</td>
         <td style="font-size:12px">${m.createdBy||'—'}</td>
@@ -1961,11 +1970,11 @@ function showModalNuevaMatricula(){
         <div class="form-group span2" id="f-pago-status-cont">
           <label class="flbl">Estado del primer pago</label>
           <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">
-            <label style="${RS}">
+            <label id="lbl-no-pagado" style="${RS}">
               <div>⏳ Aún no pagado</div>
               <input type="radio" name="f-pago-status" value="pendiente" checked onchange="togglePagoStatus(false)" style="width:16px;height:16px;flex-shrink:0">
             </label>
-            <label style="${RS}">
+            <label id="lbl-si-pagado" style="${RS}">
               <div>✅ Ya está pagado</div>
               <input type="radio" name="f-pago-status" value="pagado" onchange="togglePagoStatus(true)" style="width:16px;height:16px;flex-shrink:0">
             </label>
@@ -2025,7 +2034,7 @@ function mostrarPanelDescargaContratos(folios, nombres){
 function getSchedulePagos(m, maxMeses){
   if(!m||!m.fechaISO) return [];
   if(m.pagoTipo==='unico') maxMeses=1; // pago único: solo 1 fecha
-  maxMeses=maxMeses||6;
+  if(maxMeses==null) maxMeses=6; // null/undefined → 6 por defecto (0 es un valor válido explícito, no se sobreescribe)
   var pagados=(STATE.pagosRegulares||[])
     .filter(function(p){return p.crmFolio==m.folio||(p.paqueteFolios&&p.paqueteFolios.indexOf(m.folio)>=0);})
     .reduce(function(s,p){(p.meses||[]).forEach(function(mes){s[mes]=true;});return s;},{});
@@ -2034,9 +2043,13 @@ function getSchedulePagos(m, maxMeses){
   if(isNaN(startD.getTime())) return []; // fechaISO no válido → no calcular
   var dayOfMonth=startD.getDate();
   for(var i=0;i<maxMeses;i++){
-    var d=new Date(startD.getFullYear(), startD.getMonth()+i, dayOfMonth);
-    // Clamp a último día del mes si el día no existe
-    if(isNaN(d.getTime())||d.getDate()!==dayOfMonth) d=new Date(d.getFullYear(),d.getMonth()+1,0);
+    var targetYear=startD.getFullYear();
+    var targetMonthIdx=startD.getMonth()+i;
+    // Calcular cuántos días tiene el mes OBJETIVO antes de construir la fecha,
+    // así nunca se desborda a un mes equivocado (ej. 31 de Feb en bisiesto → no salta a Marzo)
+    var daysInTargetMonth=new Date(targetYear, targetMonthIdx+1, 0).getDate();
+    var actualDay=Math.min(dayOfMonth, daysInTargetMonth);
+    var d=new Date(targetYear, targetMonthIdx, actualDay);
     if(isNaN(d.getTime())) continue; // skip si sigue inválido
     var fISO=d.toISOString().slice(0,10);
     var mes=fISO.slice(0,7);
@@ -2103,10 +2116,30 @@ async function guardarMatricula(){
   }
   const folio=STATE.nextFolio++;
   const pagoMensualFinal=pagoMensualVal||parseFloat(pago)||0;
+  // ── Autorización Modo Dios: primer pago por debajo del mínimo del curso ──
+  var cursoObj=(STATE.cursos||[]).find(function(c){return c.nombre===curso;});
+  var minimoReq=cursoObj?(cursoObj.pagoMinimo||0):0;
+  var pagoVal=parseFloat(pago)||0;
+  var necesitaAutorizacion = minimoReq>0 && pagoVal<minimoReq && !puedeAutorizarPromos();
+  var motivoAuth='';
+  if(necesitaAutorizacion){
+    motivoAuth=prompt('⚠️ Este pago ($'+pagoVal.toLocaleString('es-MX')+') es menor al mínimo del curso ($'+minimoReq.toLocaleString('es-MX')+').\n\nLa matrícula se guardará, pero requiere autorización del Modo Dios antes de considerarse válida.\n\nExplica brevemente el motivo (ej. beca, promoción especial, caso particular):');
+    if(motivoAuth===null){ return; } // canceló — no guardar nada
+  }
   STATE.matrículas.push({folio,alumno,nacimiento:nac,curso,titular,email,telefono:tel,
     primerPago:parseFloat(pago),pagoTipo:pagoTipo,pagoMensual:pagoTipo==='unico'?null:pagoMensualFinal,
     fecha:fmtFecha(fechaISO),fechaISO,notas,
+    autorizacionPendiente:necesitaAutorizacion||false,
     createdAt:new Date().toISOString(),createdBy:currentUser.username});
+  if(necesitaAutorizacion){
+    if(!STATE.autorizacionesPago)STATE.autorizacionesPago=[];
+    STATE.autorizacionesPago.push({
+      id:uid(), folio, alumnoNombre:alumno, curso,
+      pagoIngresado:pagoVal, pagoMinimo:minimoReq, motivo:motivoAuth||'',
+      estado:'pendiente', solicitadoPor:currentUser.username, solicitadoEn:new Date().toISOString(),
+      revisadoPor:null, revisadoEn:null,
+    });
+  }
   // Auto-register first payment if already paid
   var pagoStatusEl=document.querySelector('input[name="f-pago-status"]:checked');
   var primerPagoNum=parseFloat(pago)||0;
@@ -2159,17 +2192,42 @@ async function guardarEdicion(folio){
   if(idx<0)return;
   const fechaEl=document.getElementById('e-fecha');
   const fechaISO=fechaEl?fechaEl.value:STATE.matrículas[idx].fechaISO;
+  const nuevoCurso=document.getElementById('e-curso').value;
+  const nuevoPago=parseFloat(document.getElementById('e-pago').value)||0;
+
+  // ── Mismo gate de autorización que en Nueva Matrícula: si el pago editado ──
+  // queda por debajo del mínimo del curso, requiere autorización del Modo Dios.
+  var cursoObj=(STATE.cursos||[]).find(function(c){return c.nombre===nuevoCurso;});
+  var minimoReq=cursoObj?(cursoObj.pagoMinimo||0):0;
+  var yaAutorizado=STATE.matrículas[idx].autorizacionPendiente===false||!STATE.matrículas[idx].autorizacionPendiente;
+  var necesitaAutorizacion = minimoReq>0 && nuevoPago<minimoReq && !puedeAutorizarPromos();
+  var motivoAuth='';
+  if(necesitaAutorizacion){
+    motivoAuth=prompt('⚠️ El pago editado ($'+nuevoPago.toLocaleString('es-MX')+') es menor al mínimo del curso ($'+minimoReq.toLocaleString('es-MX')+').\n\nLos cambios se guardarán, pero requieren autorización del Modo Dios.\n\nExplica brevemente el motivo:');
+    if(motivoAuth===null){ return; } // canceló — no guardar ningún cambio
+  }
+
   STATE.matrículas[idx]={
     ...STATE.matrículas[idx],
     alumno:document.getElementById('e-alumno').value.trim(),
     nacimiento:document.getElementById('e-nac').value,
-    curso:document.getElementById('e-curso').value,
+    curso:nuevoCurso,
     titular:document.getElementById('e-titular').value.trim(),
     email:document.getElementById('e-email').value.trim(),
     telefono:document.getElementById('e-tel').value.trim(),
-    primerPago:parseFloat(document.getElementById('e-pago').value)||0,
+    primerPago:nuevoPago,
     fechaISO,fecha:fmtFecha(fechaISO),
+    autorizacionPendiente:necesitaAutorizacion||false,
   };
+  if(necesitaAutorizacion){
+    if(!STATE.autorizacionesPago)STATE.autorizacionesPago=[];
+    STATE.autorizacionesPago.push({
+      id:uid(), folio, alumnoNombre:STATE.matrículas[idx].alumno, curso:nuevoCurso,
+      pagoIngresado:nuevoPago, pagoMinimo:minimoReq, motivo:(motivoAuth||'')+' (editado de matrícula existente)',
+      estado:'pendiente', solicitadoPor:currentUser.username, solicitadoEn:new Date().toISOString(),
+      revisadoPor:null, revisadoEn:null,
+    });
+  }
   await saveState();closeModal();renderMatriculas();
 }
 
@@ -2199,6 +2257,8 @@ async function eliminarMatriculasSeleccionadas(){
   if(!confirm(msg))return;
   STATE.matrículas=STATE.matrículas.filter(function(m){return !folios.includes(m.folio);});
   STATE.pagosRegulares=STATE.pagosRegulares.filter(function(p){return !folios.includes(p.crmFolio);});
+  // Limpiar autorizaciones de pago pendientes que quedarían huérfanas
+  if(STATE.autorizacionesPago) STATE.autorizacionesPago=STATE.autorizacionesPago.filter(function(a){return !folios.includes(a.folio)||a.estado!=='pendiente';});
   await saveState();
   renderMatriculas();
   buildSidebar();
@@ -2207,6 +2267,7 @@ async function eliminarMatricula(folio){
   const m=STATE.matrículas.find(x=>x.folio===folio);
   if(!confirm(`¿Eliminar matrícula #${folio} de ${m?.alumno}?\nEsta acción no se puede deshacer.`))return;
   STATE.matrículas=STATE.matrículas.filter(x=>x.folio!==folio);
+  if(STATE.autorizacionesPago) STATE.autorizacionesPago=STATE.autorizacionesPago.filter(a=>a.folio!==folio||a.estado!=='pendiente');
   await saveState();renderMatriculas();buildSidebar();
 }
 
@@ -2479,6 +2540,14 @@ function buildRegistrarPago(){
           ${buildPromoOpts(promos)}
         </select>
       </div>
+      ${puedeAutorizarPromos()?`
+      <div class="form-group">
+        <label class="flbl">2ª Promo <span style="font-size:10px;color:var(--text3)">(solo Dios/Semidios — combina sin solicitud)</span></label>
+        <select id="rp-promo2" onchange="calcPagoBreakdown()">
+          <option value="">— Sin segunda promo —</option>
+          ${buildPromoOpts(promos)}
+        </select>
+      </div>`:''}
       <div class="form-group span2" id="rp-breakdown-cont" style="display:none">
         <div class="breakdown-box" id="rp-breakdown"></div>
       </div>
@@ -2664,7 +2733,7 @@ function calcPagoBreakdown(){
 
   let promo=null,descuento=0,promoLabel='',promoError='';
   let promo2=null,descuento2=0;
-  const promoId2=hasPerm('modo_dios')?(document.getElementById('rp-promo2')?.value||''):'';
+  const promoId2=puedeAutorizarPromos()?(document.getElementById('rp-promo2')?.value||''):'';
   if(promoId){
     promo=STATE.promociones.find(p=>p.id===promoId);
     const razon=promoRazonInvalida(promo,n,cursoAlumno);
@@ -2675,7 +2744,7 @@ function calcPagoBreakdown(){
       promoLabel=promo.nombre;
     }
   }
-  if(promoId2&&promoId2!==promoId&&hasPerm('modo_dios')){
+  if(promoId2&&promoId2!==promoId&&puedeAutorizarPromos()){
     promo2=STATE.promociones.find(p=>p.id===promoId2);
     if(promo2&&!promoRazonInvalida(promo2,n,cursoAlumno)){
       if(promo2.tipo==='porcentaje') descuento2=+((subtotal-descuento)*promo2.valor/100).toFixed(2);
@@ -2731,7 +2800,7 @@ async function guardarPago(){
   }
   // MP commission calculation
   // Second promo (God Mode stacking)
-  let descuentoMonto2=0,promoNombre2='',promoId2=hasPerm('modo_dios')?(document.getElementById('rp-promo2')?.value||''):'';
+  let descuentoMonto2=0,promoNombre2='',promoId2=puedeAutorizarPromos()?(document.getElementById('rp-promo2')?.value||''):'';
   if(promoId2&&promoId2!==promoId){
     const p2=STATE.promociones.find(x=>x.id===promoId2);
     if(p2&&!promoRazonInvalida(p2,selectedMeses.length,m.curso)){
@@ -3008,6 +3077,14 @@ async function autorizarPromo(id){
   if(currentTab==='dios')renderModoDios();else renderPagoTab();
   refreshCurrentView(); // real-time: refresca cualquier vista activa (Nueva Matrícula, etc.)
 }
+async function togglePromo(id){
+  var p = (STATE.promociones||[]).find(function(x){return x.id===id;});
+  if(!p) return;
+  p.activa = !p.activa;
+  await saveState();
+  renderPagos();
+}
+
 async function eliminarPromo(id){
   if(!puedeAutorizarPromos()&&STATE.promociones.find(x=>x.id===id)?.estado==='autorizada'){alert('No tienes permisos para eliminar esta promoción.');return;}
   if(!confirm(t('promo_confirmar_elim')))return;
@@ -3318,14 +3395,6 @@ function showModalEditarCurso(nombre) {
 
 var _editingCursoNombre = ''; // Set when modal opens, used by save button
 
-function debugGuardar() {
-  var ne = _editingCursoNombre;
-  var nm = document.getElementById('mc-nombre')?.value||'';
-  var co = document.getElementById('mc-costo')?.value||'';
-  alert('nombreEdit=['+ne+']\nnombre=['+nm+']\ncosto=['+co+']');
-  guardarCursoModal(ne);
-}
-
 function renderCursoModal(c) {
   _editingCursoNombre = c ? (c.nombre||'') : '';
   var isEdit = !!c;
@@ -3381,6 +3450,8 @@ function renderCursoModal(c) {
     // ── Costo
     +'<div class="form-group"><label class="flbl">'+t('cur_costo')+' <span style="color:var(--danger)">*</span></label>'
     +'<input type="number" id="mc-costo" min="0" step="0.01" placeholder="0.00" value="'+(c?c.costoBase||'':'')+'"></div>'
+    +'<div class="form-group"><label class="flbl">Primer pago mínimo <span style="font-size:10px;color:var(--text3)">(opcional — bloquea con autorización si es menor)</span></label>'
+    +'<input type="number" id="mc-pago-minimo" min="0" step="0.01" placeholder="Sin mínimo" value="'+(c&&c.pagoMinimo?c.pagoMinimo:'')+'"></div>'
     +'<div class="form-group"><label class="flbl">'+t('cur_campo_cupo')+'</label>'
     +'<input type="number" id="mc-cupo" min="0" step="1" placeholder="Sin límite" value="'+(c?c.cupo||'':'')+'"></div>'
 
@@ -3629,6 +3700,7 @@ async function guardarCursoModal(nombreOriginal) {
   try {
     const nombre = document.getElementById('mc-nombre')?.value?.trim();
     const costo = document.getElementById('mc-costo')?.value;
+    const pagoMinimo = parseFloat(document.getElementById('mc-pago-minimo')?.value)||0;
     const tipo = document.getElementById('mc-tipo')?.value||'regular';
     const inicio = document.getElementById('mc-inicio')?.value||null;
     const fin = document.getElementById('mc-fin')?.value||null;
@@ -3671,7 +3743,7 @@ async function guardarCursoModal(nombreOriginal) {
       const idx = STATE.cursos.findIndex(x=>x.nombre===nombreOriginal);
       if(idx>=0){
         const nuevoNombre = nombre;
-        STATE.cursos[idx]={...STATE.cursos[idx],nombre:nuevoNombre,costoBase:parseFloat(costo),cupo:parseInt(document.getElementById('mc-cupo')?.value)||0,
+        STATE.cursos[idx]={...STATE.cursos[idx],nombre:nuevoNombre,costoBase:parseFloat(costo),pagoMinimo,cupo:parseInt(document.getElementById('mc-cupo')?.value)||0,
           tipo,fechaInicio:inicio,fechaFin:fin,dia,horarioDesde,horarioHasta,salon,instructorId,instructor:instObj?instObj.nombre:'',asistenteId,asistente:asistObj?asistObj.nombre:'',grupos:_modalGrupos.map(g=>({...g}))};
         // Update references in matrículas
         if(nuevoNombre!==nombreOriginal){
@@ -3682,7 +3754,7 @@ async function guardarCursoModal(nombreOriginal) {
     } else {
       // NEW
       if(STATE.cursos.find(c=>c.nombre===nombre)){alert(t('cur_existe'));return;}
-      STATE.cursos.push({id:uid(),nombre,costoBase:parseFloat(costo),tipo,
+      STATE.cursos.push({id:uid(),nombre,costoBase:parseFloat(costo),pagoMinimo,tipo,
         fechaInicio:inicio,fechaFin:fin,dia,horarioDesde,horarioHasta,salon,
         instructorId,instructor:instObj?instObj.nombre:'',
         asistenteId,asistente:asistObj?asistObj.nombre:'',
@@ -4557,6 +4629,7 @@ async function eliminarMatriculaPermanente(folio) {
   const m=STATE.matrículas.find(x=>x.folio===folio);
   if(!confirm(t('baja_elim_confirm')+(m?.alumno||'')+'?'))return;
   STATE.matrículas=STATE.matrículas.filter(x=>x.folio!==folio);
+  if(STATE.autorizacionesPago) STATE.autorizacionesPago=STATE.autorizacionesPago.filter(a=>a.folio!==folio||a.estado!=='pendiente');
   await saveState();
   closeModal();
   renderMatriculas();
@@ -4715,6 +4788,51 @@ function renderModoDios(){
       </div>
       <button onclick="toggleSemidios()" class="btn-${semidios?'danger':'green'}" style="flex-shrink:0">${semidios?'🔒 Desactivar':'🔓 Activar'} Semidios</button>
     </div>`;
+  }
+
+  // ── AUTORIZACIONES DE PAGO MENOR AL MÍNIMO ─────────────────────────────────
+  const autsPend = (STATE.autorizacionesPago||[]).filter(a=>a.estado==='pendiente');
+  if(puedeAutorizarPromos()){
+    html += `
+    <div style="font-size:13px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">
+      💰 Autorizaciones de pago bajo el mínimo
+      ${autsPend.length>0?`<span style="background:var(--danger);color:#fff;border-radius:10px;padding:2px 8px;font-size:11px;margin-left:8px">${autsPend.length}</span>`:''}
+    </div>`;
+
+    if(autsPend.length===0){
+      html += `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:24px;color:var(--text3);font-size:13px">✅ Sin solicitudes pendientes.</div>`;
+    } else {
+      html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+          <input type="checkbox" onchange="toggleAutSeleccionTodas(this.checked)" ${_autSeleccionadas.length===autsPend.length?'checked':''}>
+          Seleccionar todas (${autsPend.length})
+        </label>
+        <button class="btn-green btn-sm" ${_autSeleccionadas.length===0?'disabled style="opacity:.5;cursor:not-allowed"':''} onclick="aprobarAutorizacionesMasivo()">
+          ✓ Autorizar seleccionadas (${_autSeleccionadas.length})
+        </button>
+      </div>`;
+      html += `<div style="margin-bottom:24px">
+        ${autsPend.map(aut=>`
+          <div style="background:var(--surface);border:2px solid ${_autSeleccionadas.includes(aut.id)?'var(--accent)':'var(--border)'};border-radius:12px;padding:16px 18px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <input type="checkbox" style="margin-top:3px" ${_autSeleccionadas.includes(aut.id)?'checked':''} onchange="toggleAutSeleccion('${aut.id}',this.checked)">
+            <div style="flex:1;min-width:220px">
+              <div style="font-weight:700;font-size:15px;margin-bottom:2px">${aut.alumnoNombre} <span style="color:var(--text3);font-size:12px">· Folio #${aut.folio}</span></div>
+              <div style="font-size:12px;color:var(--text2);margin-bottom:6px">${aut.curso}</div>
+              <div style="display:flex;gap:16px;margin-bottom:8px">
+                <span style="font-size:12px;color:var(--text2)">Pago ingresado: <strong style="color:var(--danger);font-family:'DM Mono',monospace">${fmtMXN(aut.pagoIngresado)}</strong></span>
+                <span style="font-size:12px;color:var(--text2)">Mínimo requerido: <strong style="font-family:'DM Mono',monospace">${fmtMXN(aut.pagoMinimo)}</strong></span>
+              </div>
+              ${aut.motivo?`<div style="background:var(--accent-light);border-left:3px solid var(--accent);padding:8px 12px;border-radius:0 8px 8px 0;font-size:12px;color:var(--text2);margin-bottom:8px"><strong>Motivo:</strong> ${aut.motivo}</div>`:''}
+              <div style="font-size:11px;color:var(--text3)">Solicitado por: <strong>${aut.solicitadoPor}</strong> · ${aut.solicitadoEn?new Date(aut.solicitadoEn).toLocaleDateString('es-MX',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):''}</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-shrink:0">
+              <button class="btn-green btn-sm" onclick="aprobarAutorizacionPago('${aut.id}')">✓ Autorizar</button>
+              <button class="btn-danger btn-sm" onclick="rechazarAutorizacionPago('${aut.id}')">✗ Rechazar</button>
+            </div>
+          </div>
+        `).join('')}
+      </div>`;
+    }
   }
 
   // ── SOLICITUDES DE DOBLE PROMOCIÓN ─────────────────────────────────────────
@@ -5069,6 +5187,58 @@ async function rechazarSolicitud(id) {
     STATE.solicitudesStack[idx].revisadoPor = currentUser.username;
     STATE.solicitudesStack[idx].revisadoEn = new Date().toISOString();
   }
+  await saveState();
+  buildSidebar();
+  renderModoDios();
+}
+
+var _autSeleccionadas = [];
+function toggleAutSeleccion(id, checked){
+  if(checked){ if(_autSeleccionadas.indexOf(id)<0) _autSeleccionadas.push(id); }
+  else { _autSeleccionadas=_autSeleccionadas.filter(function(x){return x!==id;}); }
+  renderModoDios();
+}
+function toggleAutSeleccionTodas(checked){
+  var pend=(STATE.autorizacionesPago||[]).filter(function(a){return a.estado==='pendiente';});
+  _autSeleccionadas = checked ? pend.map(function(a){return a.id;}) : [];
+  renderModoDios();
+}
+
+async function aprobarAutorizacionPago(id){
+  if(!puedeAutorizarPromos()){ alert('Sin permisos.'); return; }
+  var aut=(STATE.autorizacionesPago||[]).find(function(a){return a.id===id;});
+  if(!aut) return;
+  aut.estado='aprobada'; aut.revisadoPor=currentUser.username; aut.revisadoEn=new Date().toISOString();
+  var mat=(STATE.matrículas||[]).find(function(m){return m.folio===aut.folio;});
+  if(mat) mat.autorizacionPendiente=false;
+  await saveState();
+  buildSidebar();
+  renderModoDios();
+}
+
+async function rechazarAutorizacionPago(id){
+  if(!puedeAutorizarPromos()){ alert('Sin permisos.'); return; }
+  var aut=(STATE.autorizacionesPago||[]).find(function(a){return a.id===id;});
+  if(!aut) return;
+  if(!confirm('¿Rechazar la autorización del pago de '+aut.alumnoNombre+'?\n\nLa matrícula seguirá registrada pero quedará marcada como rechazada — deberás dar seguimiento manual (ajustar el pago o cancelar el contrato).')) return;
+  aut.estado='rechazada'; aut.revisadoPor=currentUser.username; aut.revisadoEn=new Date().toISOString();
+  await saveState();
+  buildSidebar();
+  renderModoDios();
+}
+
+async function aprobarAutorizacionesMasivo(){
+  if(!puedeAutorizarPromos()){ alert('Sin permisos.'); return; }
+  if(_autSeleccionadas.length===0){ alert('Selecciona al menos una solicitud.'); return; }
+  if(!confirm('¿Autorizar '+_autSeleccionadas.length+' solicitud(es) de pago seleccionadas?')) return;
+  _autSeleccionadas.forEach(function(id){
+    var aut=(STATE.autorizacionesPago||[]).find(function(a){return a.id===id;});
+    if(!aut||aut.estado!=='pendiente') return;
+    aut.estado='aprobada'; aut.revisadoPor=currentUser.username; aut.revisadoEn=new Date().toISOString();
+    var mat=(STATE.matrículas||[]).find(function(m){return m.folio===aut.folio;});
+    if(mat) mat.autorizacionPendiente=false;
+  });
+  _autSeleccionadas=[];
   await saveState();
   buildSidebar();
   renderModoDios();
@@ -5710,6 +5880,7 @@ async function guardarMatriculasMultiples(){
     STATE.matrículas.push({
       folio,alumno,nacimiento:nac,curso,titular,email,telefono:tel,
       primerPago:dist[idx]||precioPorGrupo,
+      pagoTipo:'unico', // Inscripción por grupo = pago único (ya cobrado completo al inscribir, no recurrente)
       fecha:fmtFecha(fechaISO),fechaISO,
       grupoId:gid,
       grupoNombre:grupo?grupo.nombre:'',
@@ -6326,8 +6497,12 @@ function showModalInstructor(id){
           </select>
         </div>
         <div class="form-group">
-          <label class="flbl">${t('mae_tarifa')} *</label>
+          <label class="flbl">${t('mae_tarifa')} — Principal *</label>
           <input type="number" id="mi-tarifa" min="0" step="0.01" placeholder="0.00" value="${p?p.tarifaHora:''}">
+        </div>
+        <div class="form-group">
+          <label class="flbl">Tarifa/hr — Asistente <span style="font-size:10px;color:var(--text3)">(vacío = igual que Principal)</span></label>
+          <input type="number" id="mi-tarifa-asist" min="0" step="0.01" placeholder="Igual que Principal" value="${p&&p.tarifaHoraAsistente?p.tarifaHoraAsistente:''}">
         </div>
         <div class="form-group span2">
           <label class="flbl">${t('mae_especialidad')}</label>
@@ -6371,6 +6546,7 @@ async function guardarInstructor(id){
       STATE.instructores[idx].nombre = nombre;
       STATE.instructores[idx].tipo = document.getElementById('mi-tipo')?.value||'instructor';
       STATE.instructores[idx].tarifaHora = tarifa;
+      STATE.instructores[idx].tarifaHoraAsistente = tarifaAsist;
       STATE.instructores[idx].especialidad = document.getElementById('mi-esp')?.value?.trim()||'';
       STATE.instructores[idx].email = document.getElementById('mi-email')?.value?.trim()||'';
       STATE.instructores[idx].telefono = document.getElementById('mi-tel')?.value?.trim()||'';
@@ -6381,6 +6557,7 @@ async function guardarInstructor(id){
       id: uid(), nombre,
       tipo: document.getElementById('mi-tipo')?.value||'instructor',
       tarifaHora: tarifa,
+      tarifaHoraAsistente: tarifaAsist,
       especialidad: document.getElementById('mi-esp')?.value?.trim()||'',
       email: document.getElementById('mi-email')?.value?.trim()||'',
       telefono: document.getElementById('mi-tel')?.value?.trim()||'',
@@ -6421,11 +6598,60 @@ async function adminFinalizarSesion(sesionId, rol){
   showModalSesionesInstructor(instrId);
 }
 
-async function adminBorrarSesion(sesionId){
-  if(!confirm('¿Borrar esta sesión y reiniciar sus horas a 0?\n\nSolo borra datos de hoy, no afecta otras fechas.')) return;
-  STATE.sesionesClase=(STATE.sesionesClase||[]).filter(function(x){return x.id!==sesionId;});
+async function adminBorrarSesion(sesionId, instrId, rol){
+  // Solo borra los datos DEL ROL de este instructor en esta sesión — NO afecta al otro rol.
+  var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
+  if(!s)return;
+  var rolLabel=rol==='principal'?'Instructor Principal':'Instructor Asistente';
+  if(!confirm('¿Borrar las horas de '+rolLabel+' en esta sesión?\n\nSolo afecta a este instructor y este día. El otro rol (si existe) no se modifica.')) return;
+  if(rol==='principal'){
+    s.tramosP=[]; s.horasInstructor=0; s.estadoP=null;
+  } else {
+    s.tramosA=[]; s.horasAsistente=0; s.estadoA=null;
+  }
+  // Si la sesión quedó completamente vacía (ningún rol con datos), eliminarla del todo
+  var vacioP=!s.estadoP && !(s.tramosP&&s.tramosP.length);
+  var vacioA=!s.estadoA && !(s.tramosA&&s.tramosA.length);
+  if(vacioP && vacioA){
+    STATE.sesionesClase=(STATE.sesionesClase||[]).filter(function(x){return x.id!==sesionId;});
+  }
   await saveState();
-  renderMaestros();
+  showModalSesionesInstructor(instrId);
+}
+
+async function adminBorrarTramo(sesionId, instrId, rol, tramoIdx){
+  var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
+  if(!s)return;
+  var campoTramos=rol==='principal'?'tramosP':'tramosA';
+  var campoHoras=rol==='principal'?'horasInstructor':'horasAsistente';
+  var tramos=s[campoTramos]||[];
+  var tr=tramos[tramoIdx];
+  if(!tr)return;
+  if(!confirm('¿Borrar este tramo de '+(tr.horas||0).toFixed(2)+' h?')) return;
+  s[campoHoras]=Math.max(0,(s[campoHoras]||0)-(tr.horas||0));
+  tramos.splice(tramoIdx,1);
+  s[campoTramos]=tramos;
+  if(!tramos.length){
+    if(rol==='principal'){s.estadoP=null; s.horasInstructor=0;}
+    else{s.estadoA=null; s.horasAsistente=0;}
+  }
+  await saveState();
+  showModalSesionesInstructor(instrId);
+}
+
+async function adminEditarHorasTramo(sesionId, instrId, rol, tramoIdx){
+  var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
+  if(!s)return;
+  var campoTramos=rol==='principal'?'tramosP':'tramosA';
+  var campoHoras=rol==='principal'?'horasInstructor':'horasAsistente';
+  var tr=(s[campoTramos]||[])[tramoIdx];
+  if(!tr)return;
+  var nuevo=parseFloat(prompt('Horas para este tramo (actual: '+((tr.horas||0).toFixed(2))+'):',(tr.horas||0)));
+  if(isNaN(nuevo)||nuevo<0)return;
+  s[campoHoras]=Math.max(0,(s[campoHoras]||0)-(tr.horas||0)+nuevo);
+  tr.horas=nuevo; tr.fin=tr.fin||new Date().toISOString();
+  await saveState();
+  showModalSesionesInstructor(instrId);
 }
 
 function showModalSesionesInstructor(instrId){
