@@ -5949,12 +5949,19 @@ async function comenzarClaseHorario(gid, cid, rol){
     STATE.sesionesClase.push(s);
   }
   s.modulo=modulo;
+  // Puente maestro: currentUser.id es el ID del usuario (tabla usuarios),
+  // pero sesionesClase.instructorId debe ser p.id (tabla instructores).
+  var _maestroB=(STATE.instructores||[]).find(function(i){
+    return i.userId===currentUser.id||i.nombre===currentUser.name||i.nombre===currentUser.username;
+  });
+  var _instrId=_maestroB?_maestroB.id:currentUser.id;
+
   if(rol==='principal'){
-    s.instructorId=currentUser.id; s.estadoP='iniciada';
+    s.instructorId=_instrId; s.estadoP='iniciada';
     if(!s.tramosP)s.tramosP=[];
     s.tramosP.push({inicio:new Date().toISOString()});
   } else {
-    s.asistenteId=currentUser.id; s.estadoA='iniciada';
+    s.asistenteId=_instrId; s.estadoA='iniciada';
     if(!s.tramosA)s.tramosA=[];
     s.tramosA.push({inicio:new Date().toISOString()});
   }
@@ -6124,7 +6131,8 @@ function renderMaestros(){
       ? '<span style="color:var(--green);font-size:11px">● Activo</span>'
       : '<span style="color:var(--text3);font-size:11px">○ Inactivo</span>';
 
-    return '<tr>'
+    var trStyle=p.activo===false?'background:rgba(239,68,68,.08);border-left:3px solid var(--danger)':'';
+    return '<tr style="'+trStyle+'">'
       + '<td><div style="font-weight:600">'+p.nombre+'</div>'
       + (p.especialidad?'<div style="font-size:11px;color:var(--text3)">'+p.especialidad+'</div>':'')
       + '</td>'
