@@ -1696,17 +1696,19 @@ function renderClasesInstructor(){
 }
 
 function renderDashboard(){
-  try{
-  const total=STATE.matrículas.length;
-  const activosHoy=alumnosActivosEnMes(monthStr()).length;
+  const mats=STATE.matrículas||[];
+  const pagosR=STATE.pagosRegulares||[];
+  const promos=STATE.promociones||[];
+  const total=mats.length;
+  const activosHoy=(alumnosActivosEnMes(monthStr())||[]).length;
   const now=new Date();
   const cm=monthStr();
-  const esteMes=STATE.matrículas.filter(m=>{const d=new Date(m.fechaISO||Date.now());return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).length;
-  const pagosMes=STATE.pagosRegulares.filter(p=>(p.meses&&p.meses.includes(cm))||(p.fechaISO&&p.fechaISO.startsWith(cm))||(p.fecha&&p.fecha.includes(cm.split('-')[1])));
+  const esteMes=mats.filter(m=>{const d=new Date(m.fechaISO||Date.now());return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).length;
+  const pagosMes=pagosR.filter(p=>(p.meses&&p.meses.includes(cm))||(p.fechaISO&&p.fechaISO.startsWith(cm))||(p.fecha&&p.fecha.includes(cm.split('-')[1])));
   const ingresosPagosMes=pagosMes.reduce((s,p)=>s+(p.montoFinal||0),0);
   const alumnosPagadosMes=new Set(pagosMes.map(p=>p.alumnoNombre)).size;
-  const alumnosPendientes=STATE.matrículas.filter(m=>!pagosMes.some(p=>p.alumnoNombre===m.alumno)).length;
-  const promoActiva=STATE.promociones.filter(p=>p.activa&&p.fechaFin>=cm).length;
+  const alumnosPendientes=mats.filter(m=>!pagosMes.some(p=>p.alumnoNombre===m.alumno)).length;
+  const promoActiva=promos.filter(p=>p.activa&&p.fechaFin>=cm).length;
 
   const porCurso=(STATE.cursos||[]).map(c=>({
     nombre:c.nombre,
@@ -1794,7 +1796,6 @@ function renderDashboard(){
       <div style="font-family:'DM Mono',monospace;font-size:13px;font-weight:600;color:var(--accent);min-width:50px;text-align:right">${c.count}${c.cupo?' / '+c.cupo:''}</div>
     </div>`).join('')}
   </div>`:''}`;
-  }catch(e){console.error('renderDashboard error:',e);}
 }
 
 // ════════════════════════════════════════════════
@@ -5773,7 +5774,10 @@ function renderHorarios(){
       var esP=gInstr===uid||(maestro&&gInstr===maestro.id);
       var esA=gAsist===uid||(maestro&&gAsist===maestro.id);
       if(!esP&&!esA) return;
-      todas.push({c:c,g:g,esP:esP,esA:esA});
+      // No mostrar cursos que aún no han iniciado
+     var fechaIni=c.fechaInicio||g.fechaInicio||'';
+     if(fechaIni && fechaIni > hoy) return;
+     todas.push({c:c,g:g,esP:esP,esA:esA});
     });
   });
 
