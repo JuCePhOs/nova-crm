@@ -6131,7 +6131,8 @@ function renderMaestros(){
       ? '<span style="color:var(--green);font-size:11px">● Activo</span>'
       : '<span style="color:var(--text3);font-size:11px">○ Inactivo</span>';
 
-    var trStyle=p.activo===false?'background:rgba(239,68,68,.08);border-left:3px solid var(--danger)':'';
+    var isInact=p.activo===false||p.activo==='false';
+    var trStyle=isInact?'background:#fde8e6;outline:2px solid #c0392b;outline-offset:-2px':'';
     return '<tr style="'+trStyle+'">'
       + '<td><div style="font-weight:600">'+p.nombre+'</div>'
       + (p.especialidad?'<div style="font-size:11px;color:var(--text3)">'+p.especialidad+'</div>':'')
