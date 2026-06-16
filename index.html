@@ -1942,7 +1942,20 @@ function showModalNuevaMatricula(){
           <input type="number" id="f-pago" min="0" placeholder="0.00" oninput="updateFirstPaymentStatus()">
         </div>
         <div class="form-group">
-          <label class="flbl">Pago mensual subsiguiente <span style="font-size:10px;color:var(--text3)">(2°, 3°… mes)</span></label>
+          <label class="flbl">Tipo de pago</label>
+          <div style="display:flex;gap:10px;margin-top:4px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="radio" name="f-tipo-pago" value="mensual" checked onchange="(function(){document.getElementById('f-pago-mensual-wrap').style.display='';})()">
+              🔁 Mensual recurrente
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="radio" name="f-tipo-pago" value="unico" onchange="(function(){document.getElementById('f-pago-mensual-wrap').style.display='none';})()">
+              💳 Pago único
+            </label>
+          </div>
+        </div>
+        <div class="form-group" id="f-pago-mensual-wrap">
+          <label class="flbl">Pago mensual subsiguiente <span style="font-size:10px;color:var(--text3)">(2°, 3°… mes — vacío = igual al primero)</span></label>
           <input type="number" id="f-pago-mensual" min="0" placeholder="Igual al primer pago si vacío">
         </div>
         <div class="form-group span2" id="f-pago-status-cont">
@@ -2011,6 +2024,7 @@ function mostrarPanelDescargaContratos(folios, nombres){
 // esperada de una matrícula, empezando desde su fecha de inicio.
 function getSchedulePagos(m, maxMeses){
   if(!m||!m.fechaISO) return [];
+  if(m.pagoTipo==='unico') maxMeses=1; // pago único: solo 1 fecha
   maxMeses=maxMeses||6;
   var pagados=(STATE.pagosRegulares||[])
     .filter(function(p){return p.crmFolio==m.folio||(p.paqueteFolios&&p.paqueteFolios.indexOf(m.folio)>=0);})
@@ -2053,6 +2067,8 @@ async function guardarMatricula(){
   const pago=document.getElementById('f-pago').value;
   const pagoMensualRaw=document.getElementById('f-pago-mensual');
   const pagoMensualVal=pagoMensualRaw?parseFloat(pagoMensualRaw.value)||null:null;
+  const tipoPagoEl=document.querySelector('input[name="f-tipo-pago"]:checked');
+  const pagoTipo=(tipoPagoEl&&tipoPagoEl.value)==='unico'?'unico':'mensual';
   const fechaEl=document.getElementById('f-fecha');
   const fechaISO=fechaEl?fechaEl.value:todayISO();
   const notas=(document.getElementById('f-notas')||{value:''}).value;
@@ -2088,7 +2104,7 @@ async function guardarMatricula(){
   const folio=STATE.nextFolio++;
   const pagoMensualFinal=pagoMensualVal||parseFloat(pago)||0;
   STATE.matrículas.push({folio,alumno,nacimiento:nac,curso,titular,email,telefono:tel,
-    primerPago:parseFloat(pago),pagoMensual:pagoMensualFinal,
+    primerPago:parseFloat(pago),pagoTipo:pagoTipo,pagoMensual:pagoTipo==='unico'?null:pagoMensualFinal,
     fecha:fmtFecha(fechaISO),fechaISO,notas,
     createdAt:new Date().toISOString(),createdBy:currentUser.username});
   // Auto-register first payment if already paid
@@ -5750,8 +5766,34 @@ function getAlumnosDeGrupo(cursoNombre, grupoId){
 }
 
 // ── Vista principal: clases de HOY para el instructor logueado ────────────
+function autoFinalizarSesionesPasadas(){
+  var ahora=new Date();
+  var changed=false;
+  (STATE.sesionesClase||[]).forEach(function(s){
+    var limite=horarioHastaDeSesion(s);
+    if(!limite||ahora<=limite) return;
+    ['P','A'].forEach(function(rol){
+      var campo=rol==='P'?'estadoP':'estadoA';
+      var trampKey=rol==='P'?'tramosP':'tramosA';
+      var horasKey=rol==='P'?'horasInstructor':'horasAsistente';
+      if(s[campo]!=='iniciada') return;
+      var tramos=s[trampKey]||[];
+      var tr=tramos[tramos.length-1];
+      if(tr&&!tr.fin){
+        tr.fin=limite.toISOString();
+        tr.horas=Math.max(0,(limite-new Date(tr.inicio))/3600000);
+        s[horasKey]=(s[horasKey]||0)+tr.horas;
+      }
+      s[campo]='finalizada';
+      changed=true;
+    });
+  });
+  if(changed) saveState();
+}
+
 function renderHorarios(){
  try {
+  autoFinalizarSesionesPasadas(); // cierra automáticamente si pasó horarioHasta
   var uid=currentUser.id;
   var hoy=todayISO();
   var diaHoy=diaHoyNombre();
@@ -5901,7 +5943,7 @@ function renderRolControls(t, rol, s, modHoy){
     return '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">'
       +'<div style="font-size:11px;font-weight:700;color:#92600a;margin-bottom:6px">'+label+' · ⏸ Pausa académica</div>'
       +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
-      +'<button class="btn-primary btn-sm" onclick="reanudarClaseHorario(\''+s.id+'\',\''+rol+'\')"><i class="ti ti-player-play"></i> Reanudar (yo continúo)</button>'
+      +'<button class="btn-primary btn-sm" onclick="reanudarClaseHorario(\''+s.id+'\',\''+rol+'\')"><i class="ti ti-player-play"></i> ▶ Reanudar clase</button>'
       +'<button class="btn-green btn-sm" onclick="finalizarClaseHorario(\''+s.id+'\',\''+rol+'\')"><i class="ti ti-circle-check"></i> Finalizar clase</button>'
       +'</div></div>';
   }
@@ -6010,7 +6052,7 @@ async function pausarClaseHorario(sesionId, rol){
   var tramos=rol==='principal'?(s.tramosP||[]):(s.tramosA||[]);
   var tr=tramos[tramos.length-1];
   if(tr&&!tr.fin){
-    tr.fin=finDeTramoConTope(s).toISOString();
+    tr.fin=new Date().toISOString(); // hora real del click
     tr.horas=Math.max(0,(new Date(tr.fin)-new Date(tr.inicio))/3600000);
     if(rol==='principal') s.horasInstructor=(s.horasInstructor||0)+tr.horas;
     else s.horasAsistente=(s.horasAsistente||0)+tr.horas;
@@ -6043,7 +6085,7 @@ async function finalizarClaseHorario(sesionId, rol){
   var tramos=rol==='principal'?(s.tramosP||[]):(s.tramosA||[]);
   var tr=tramos[tramos.length-1];
   if(tr&&!tr.fin){
-    tr.fin=finDeTramoConTope(s).toISOString();
+    tr.fin=new Date().toISOString(); // hora real del click
     tr.horas=Math.max(0,(new Date(tr.fin)-new Date(tr.inicio))/3600000);
     if(rol==='principal') s.horasInstructor=(s.horasInstructor||0)+tr.horas;
     else s.horasAsistente=(s.horasAsistente||0)+tr.horas;
