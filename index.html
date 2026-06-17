@@ -6339,14 +6339,17 @@ async function pausarClaseHorario(sesionId, rol){
 async function reanudarClaseHorario(sesionId, rol){
   var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
   if(!s) return;
+  // NO se reasigna instructorId/asistenteId aquí — ya quedó correctamente puenteado
+  // (tabla usuarios → tabla instructores) desde comenzarClaseHorario. Sobreescribirlo
+  // con currentUser.id crudo corrompía el vínculo y rompía el cálculo de pagos en Contabilidad.
   if(rol==='principal'){
     if(!s.tramosP)s.tramosP=[];
     s.tramosP.push({inicio:new Date().toISOString()});
-    s.estadoP='iniciada'; s.instructorId=currentUser.id;
+    s.estadoP='iniciada';
   } else {
     if(!s.tramosA)s.tramosA=[];
     s.tramosA.push({inicio:new Date().toISOString()});
-    s.estadoA='iniciada'; s.asistenteId=currentUser.id;
+    s.estadoA='iniciada';
   }
   await saveState();
   renderHorarios();
