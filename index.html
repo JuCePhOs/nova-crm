@@ -5784,9 +5784,18 @@ function recalcMultiPago(cursoNombre){
   var inp=document.getElementById('mi-total-input');
   var minTxt=document.getElementById('mi-min-txt');
   if(inp){
+    var autoPrevio=parseFloat(inp.getAttribute('data-autoval')||'0');
+    var valorActual=parseFloat(inp.value)||0;
+    var fueEditadoManualmente = inp.value!=='' && valorActual!==autoPrevio;
+    if(!fueEditadoManualmente || valorActual<total){
+      // No lo había tocado el admin desde el último cálculo (o su número quedó por debajo
+      // del nuevo mínimo): seguir el total automático tanto si sube como si baja.
+      inp.value=total;
+    }
+    // Si SÍ lo editó a mano y su número sigue siendo válido (>= nuevo total), se respeta tal cual.
+    inp.setAttribute('data-autoval',total);
     inp.setAttribute('data-min',total);
     inp.min=total;
-    if(!inp.value||parseFloat(inp.value)<total)inp.value=total;
     if(minTxt)minTxt.textContent='$'+total.toLocaleString('es-MX');
     onManualTotalChange();
   }
@@ -6651,6 +6660,77 @@ async function adminBorrarTramo(sesionId, instrId, rol, tramoIdx){
   showModalSesionesInstructor(instrId, s.mes);
 }
 
+function showModalAgregarClaseManual(instrId, mesVer){
+  var p=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
+  if(!p) return;
+  var mc=document.getElementById('modal-container');
+  if(!mc) return;
+  var cursosOpts=(STATE.cursos||[]).map(function(c){return '<option value="'+c.id+'">'+c.nombre+'</option>';}).join('');
+  var fechaSugerida = mesVer ? (mesVer+'-01') : todayISO();
+  mc.innerHTML='<div class="moverlay" style="z-index:10000">'
+    +'<div class="modal" style="max-width:440px">'
+    +'<div class="modal-hdr"><div class="modal-title">➕ Agregar clase — '+p.nombre+'</div>'
+    +'<button class="modal-close" onclick="showModalSesionesInstructor(\''+instrId+'\',\''+(mesVer||monthStr())+'\')">✕</button></div>'
+    +'<div class="modal-body">'
+    +'<div style="background:var(--accent-bg,#eff6ff);border:1px solid var(--accent);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px">'
+    +'Usa esto para registrar clases de antes de que existiera este sistema, o cualquier clase que nunca se inició/finalizó en vivo. Se suma igual que cualquier otra clase.</div>'
+    +'<div class="form-grid">'
+    +'<div class="form-group span2"><label class="flbl">Curso</label><select id="acm-curso"><option value="">— Selecciona —</option>'+cursosOpts+'</select></div>'
+    +'<div class="form-group span2"><label class="flbl">¿Esta clase fue como...?</label>'
+    +'<select id="acm-rol"><option value="principal">Instructor principal</option><option value="asistente">Asistente</option></select></div>'
+    +'<div class="form-group span2"><label class="flbl">Fecha de la clase</label><input type="date" id="acm-fecha" value="'+fechaSugerida+'"></div>'
+    +'<div class="form-group"><label class="flbl">Hora de inicio</label><input type="time" id="acm-inicio" value="09:00"></div>'
+    +'<div class="form-group"><label class="flbl">Hora de fin</label><input type="time" id="acm-fin" value="11:00"></div>'
+    +'</div>'
+    +'<div class="form-actions">'
+    +'<button class="btn-ghost" onclick="showModalSesionesInstructor(\''+instrId+'\',\''+(mesVer||monthStr())+'\')">Cancelar</button>'
+    +'<button class="btn-primary" onclick="guardarClaseManual(\''+instrId+'\')"><i class="ti ti-device-floppy"></i> Guardar clase</button>'
+    +'</div></div></div></div>';
+}
+
+async function guardarClaseManual(instrId){
+  var cursoId=document.getElementById('acm-curso').value;
+  var rol=document.getElementById('acm-rol').value;
+  var fecha=document.getElementById('acm-fecha').value;
+  var horaIni=document.getElementById('acm-inicio').value;
+  var horaFin=document.getElementById('acm-fin').value;
+  if(!cursoId){ alert('Selecciona un curso.'); return; }
+  if(!fecha){ alert('Selecciona una fecha.'); return; }
+  if(!horaIni||!horaFin){ alert('Captura la hora de inicio y de fin.'); return; }
+
+  var partsI=horaIni.split(':').map(Number), partsF=horaFin.split(':').map(Number);
+  var dIni=new Date(fecha+'T00:00:00'); dIni.setHours(partsI[0],partsI[1],0,0);
+  var dFin=new Date(fecha+'T00:00:00'); dFin.setHours(partsF[0],partsF[1],0,0);
+  if(dFin<=dIni) dFin.setDate(dFin.getDate()+1);
+  var horas=+((dFin-dIni)/3600000).toFixed(2);
+  if(horas<=0||horas>16){ alert('El horario capturado no es válido.'); return; }
+
+  var mes=fecha.slice(0,7);
+  var campoId=rol==='principal'?'instructorId':'asistenteId';
+  var campoTramos=rol==='principal'?'tramosP':'tramosA';
+  var campoHoras=rol==='principal'?'horasInstructor':'horasAsistente';
+  var campoEstado=rol==='principal'?'estadoP':'estadoA';
+
+  // ¿Ya existe una sesión de ESE día, curso e instructor en ese rol? Si sí, se le agrega el tramo;
+  // si no, se crea una sesión nueva. Así varias clases manuales del mismo día se acumulan igual
+  // que las clases en vivo con pausas/reanudaciones.
+  var s=(STATE.sesionesClase||[]).find(function(x){
+    return x.fecha===fecha && x.cursoId===cursoId && x[campoId]===instrId;
+  });
+  if(!s){
+    s={id:uid(), cursoId, fecha, mes, instructorId:null, asistenteId:null, tramosP:[], tramosA:[], horasInstructor:0, horasAsistente:0, manual:true};
+    s[campoId]=instrId;
+    STATE.sesionesClase.push(s);
+  }
+  s[campoTramos]=s[campoTramos]||[];
+  s[campoTramos].push({inicio:dIni.toISOString(), fin:dFin.toISOString(), horas, manual:true});
+  s[campoHoras]=+s[campoTramos].reduce(function(acc,t){return acc+(t.horas||0);},0).toFixed(2);
+  s[campoEstado]='finalizada';
+
+  await saveState();
+  showModalSesionesInstructor(instrId, mes);
+}
+
 function showModalSesionesInstructor(instrId, mesVer){
   var p=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
   if(!p) return;
@@ -6734,6 +6814,7 @@ function showModalSesionesInstructor(instrId, mesVer){
     +' · '+sesiones.length+' día'+(sesiones.length!==1?'s':'')+' con clase</div>'
     +'<div style="font-size:10px;color:var(--text3);margin-bottom:12px">'
     +'✏️ Editar horario = cambia hora de inicio/fin (recalcula horas automáticamente) · 🗑 Borrar día = reinicia la sesión completa</div>'
+    +'<button class="btn-primary btn-sm" style="width:100%;margin-bottom:14px" onclick="showModalAgregarClaseManual(\''+instrId+'\',\''+cm+'\')"><i class="ti ti-plus"></i> Agregar clase de este instructor (para meses o días que no se registraron en vivo)</button>'
     +rows+'</div></div></div>';
 }
 
