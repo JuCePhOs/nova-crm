@@ -1023,6 +1023,26 @@ function fmtMXN(n){return new Intl.NumberFormat('es-MX',{style:'currency',curren
 function fmtFecha(iso){if(!iso)return'—';const[y,m,d]=iso.split('-');const meses=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];return`${parseInt(d)} de ${meses[parseInt(m)-1]} de ${y}`;}
 function mesLabel(ym){const[y,m]=ym.split('-');const n=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];return`${n[parseInt(m)-1]} ${y}`;}
 function monthStr(){const n=new Date();return`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;}
+function prevMonth(ym){const[y,m]=ym.split('-').map(Number);let py=y,pm=m-1;if(pm<1){pm=12;py--;}return`${py}-${String(pm).padStart(2,'0')}`;}
+function calcNominaInstructoresMes(mesPago){
+  // Nómina que se PAGA en "mesPago" = horas finalizadas en el mes ANTERIOR (pago con un mes de retraso).
+  var mesHoras = prevMonth(mesPago);
+  var inst = STATE.instructores||[];
+  var sesiones = STATE.sesionesClase||[];
+  var total = 0;
+  inst.filter(function(p){return p.activo!==false;}).forEach(function(p){
+    var altId = p.userId||null;
+    var hP=0, hA=0;
+    sesiones.forEach(function(s){
+      if(s.mes!==mesHoras) return;
+      if((s.instructorId===p.id||(altId&&s.instructorId===altId))&&s.estadoP==='finalizada') hP+=s.horasInstructor||0;
+      if((s.asistenteId===p.id||(altId&&s.asistenteId===altId))&&s.estadoA==='finalizada') hA+=s.horasAsistente||0;
+    });
+    var tarifaA = p.tarifaHoraAsistente||p.tarifaHora||0;
+    total += hP*(p.tarifaHora||0) + hA*tarifaA;
+  });
+  return +total.toFixed(2);
+}
 function todayISO(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function calcEdad(nacISO){
   if(!nacISO)return null;
@@ -1284,11 +1304,6 @@ function checkScheduleConflict(salon, desde, hasta, fechaIni, fechaFin, excludeC
 }
 
 // Build <select> for time slots
-function timeSelect(id, val, options, onChange){
-  return`<select id="${id}" onchange="${onChange}" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;background:var(--surface);color:var(--text);flex:1">
-    ${options.map(t=>`<option value="${t}"${t===val?' selected':''}>${t}</option>`).join('')}
-  </select>`;
-}
 
 // Full course name including group
 function cursoGrupoLabel(cursoNombre, grupoNombre){
@@ -1296,26 +1311,6 @@ function cursoGrupoLabel(cursoNombre, grupoNombre){
 }
 
 // Get all selectable course+group combinations
-function getAllGrupos(){
-  const result=[];
-  for(const c of STATE.cursos){
-    if(!c.grupos||c.grupos.length===0){
-      result.push({cursoId:c.id,cursoNombre:c.nombre,grupoId:null,grupoNombre:null,
-        salon:c.salon,desde:c.horarioDesde,hasta:c.horarioHasta,
-        costoBase:parseFloat(String(c.costoBase||'').replace(/[^0-9.]/g,''))||0,
-        fechaInicio:c.fechaInicio,fechaFin:c.fechaFin,label:c.nombre});
-    } else {
-      for(const g of c.grupos){
-        result.push({cursoId:c.id,cursoNombre:c.nombre,grupoId:g.id,grupoNombre:g.nombre,
-          salon:g.salon||c.salon,desde:g.horarioDesde||c.horarioDesde,hasta:g.horarioHasta||c.horarioHasta,
-          costoBase:g.costoBase||parseFloat(String(c.costoBase||'').replace(/[^0-9.]/g,''))||0,
-          fechaInicio:g.fechaInicio||c.fechaInicio,fechaFin:g.fechaFin||c.fechaFin,
-          label:cursoGrupoLabel(c.nombre,g.nombre)});
-      }
-    }
-  }
-  return result;
-}
 
 // ════════════════════════════════════════════════
 //  PROYECCIÓN — HELPERS
@@ -1833,6 +1828,9 @@ function renderMatriculas(){
   <div id="mat-bulk-bar" style="display:none;background:var(--danger-soft,#fef2f2);border:1px solid #fca5a5;border-radius:8px;padding:10px 16px;align-items:center;gap:14px;margin-bottom:10px">
     <i class="ti ti-checkbox" style="color:var(--danger);font-size:18px"></i>
     <span id="mat-bulk-count" style="font-weight:700;font-size:13px;flex:1">0 seleccionadas</span>
+    <button class="btn-primary btn-sm" onclick="showModalEditarMatriculasMasivo()">
+      <i class="ti ti-edit"></i> Editar selección
+    </button>
     <button class="btn-danger btn-sm" onclick="eliminarMatriculasSeleccionadas()">
       <i class="ti ti-trash"></i> Eliminar seleccionadas
     </button>
@@ -1941,7 +1939,7 @@ function showModalNuevaMatricula(){
         <div class="form-group span2" id="f-multi-grupos-cont" style="display:none"></div>
         <div class="form-group span2" id="f-promo-cont" style="display:none">
           <label class="flbl">Promoción aplicable</label>
-          <select id="f-promo" onchange="recalcPagoConPromo()">
+          <select id="f-promo" onchange="recalcPagoConPromo(true)">
             <option value="">— Sin promoción —</option>
             `+promoOpts+`
           </select>
@@ -2208,6 +2206,91 @@ function showModalEditarMatricula(folio){
   actualizarGrupoEdicion(m.grupoId||null);
 }
 
+function showModalEditarMatriculasMasivo(){
+  var folios=[...document.querySelectorAll('.mat-chk:checked')].map(function(c){return parseInt(c.value);});
+  if(folios.length===0) return;
+  if(folios.length===1) return showModalEditarMatricula(folios[0]);
+  var n=folios.length;
+  var primero=STATE.matrículas.find(function(m){return m.folio===folios[0];});
+  document.getElementById('modal-container').innerHTML=`
+  <div class="moverlay">
+  <div class="modal">
+    <div class="modal-hdr"><div class="modal-title"><i class="ti ti-edit"></i> Editar ${n} matrículas seleccionadas</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="background:var(--accent-bg,#eff6ff);border:1px solid var(--accent);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px">
+        ⚠️ Marca la casilla de cada campo que quieras cambiar para <strong>las ${n} matrículas seleccionadas a la vez</strong> (folios #${folios.join(', #')}). Los campos sin marcar NO se modifican — cada matrícula conserva su valor actual. Nombre, correo y teléfono no se incluyen aquí porque son datos propios de cada alumno.
+      </div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="flbl"><input type="checkbox" id="em-chk-curso" onchange="document.getElementById('em-curso').disabled=!this.checked;document.getElementById('em-grupo-cont-masivo').style.display=this.checked?'':'none';"> Curso</label>
+          <select id="em-curso" disabled onchange="actualizarGrupoEdicionMasivo()"><option value="">— Selecciona —</option>${(STATE.cursos||[]).map(c=>`<option${c.nombre===primero.curso?' selected':''}>${c.nombre}</option>`).join('')}</select>
+        </div>
+        <div class="form-group" id="em-grupo-cont-masivo" style="display:none"><label class="flbl">Grupo</label><select id="em-grupo"></select></div>
+        <div class="form-group">
+          <label class="flbl"><input type="checkbox" id="em-chk-pago" onchange="document.getElementById('em-pago').disabled=!this.checked;"> Primer pago (MXN)</label>
+          <input type="number" id="em-pago" disabled value="${primero.primerPago||''}">
+        </div>
+        <div class="form-group">
+          <label class="flbl"><input type="checkbox" id="em-chk-fecha" onchange="document.getElementById('em-fecha').disabled=!this.checked;"> ${t('mat_campo_fecha')}</label>
+          <input type="date" id="em-fecha" disabled value="${primero.fechaISO||todayISO()}">
+        </div>
+        ${puedeAutorizarPromos()?`<div class="form-group span2">
+          <label class="flbl"><input type="checkbox" id="em-chk-creadopor" onchange="document.getElementById('em-creadopor').disabled=!this.checked;"> Creado por <span style="font-size:10px;color:var(--text3)">(determina a quién se le suman las comisiones)</span></label>
+          <select id="em-creadopor" disabled>${(STATE.usuarios||[]).map(u=>`<option value="${u.username}"${u.username===primero.createdBy?' selected':''}>${u.name||u.username} (${u.username})</option>`).join('')}</select>
+        </div>`:''}
+      </div>
+      <div class="form-actions">
+        <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
+        <button class="btn-primary" onclick="guardarEdicionMasiva([${folios.join(',')}])"><i class="ti ti-device-floppy"></i> Aplicar a las ${n} seleccionadas</button>
+      </div>
+    </div>
+  </div></div>`;
+}
+
+function actualizarGrupoEdicionMasivo(){
+  var cursoNombre=document.getElementById('em-curso').value;
+  var cont=document.getElementById('em-grupo-cont-masivo');
+  var sel=document.getElementById('em-grupo');
+  var curso=(STATE.cursos||[]).find(function(c){return c.nombre===cursoNombre;});
+  if(!curso||!curso.grupos||!curso.grupos.length){ if(cont)cont.style.display='none'; return; }
+  if(cont) cont.style.display=document.getElementById('em-chk-curso').checked?'':'none';
+  if(sel) sel.innerHTML='<option value="">— Sin grupo —</option>'+curso.grupos.map(function(g){return'<option value="'+g.id+'">'+g.nombre+'</option>';}).join('');
+}
+
+async function guardarEdicionMasiva(folios){
+  var cambios={};
+  if(document.getElementById('em-chk-curso').checked){
+    cambios.curso=document.getElementById('em-curso').value;
+    var gEl=document.getElementById('em-grupo');
+    cambios.grupoId=(gEl&&gEl.value)||null;
+    var c=(STATE.cursos||[]).find(function(x){return x.nombre===cambios.curso;});
+    var g=(c&&c.grupos&&cambios.grupoId)?c.grupos.find(function(x){return x.id===cambios.grupoId;}):null;
+    cambios.grupoNombre=g?g.nombre:null;
+  }
+  if(document.getElementById('em-chk-pago').checked){
+    cambios.primerPago=parseFloat(document.getElementById('em-pago').value)||0;
+  }
+  if(document.getElementById('em-chk-fecha').checked){
+    cambios.fechaISO=document.getElementById('em-fecha').value;
+    cambios.fecha=fmtFecha(cambios.fechaISO);
+  }
+  var creadoPorEl=document.getElementById('em-chk-creadopor');
+  if(creadoPorEl&&creadoPorEl.checked){
+    cambios.createdBy=document.getElementById('em-creadopor').value;
+  }
+  if(Object.keys(cambios).length===0){ alert('No marcaste ningún campo para aplicar. Selecciona al menos uno.'); return; }
+  if(!confirm('¿Aplicar estos cambios a las '+folios.length+' matrículas seleccionadas (folios #'+folios.join(', #')+')?\\n\\nCampos a cambiar: '+Object.keys(cambios).join(', ')))return;
+  folios.forEach(function(folio){
+    var idx=STATE.matrículas.findIndex(function(x){return x.folio===folio;});
+    if(idx<0) return;
+    STATE.matrículas[idx]={...STATE.matrículas[idx], ...cambios};
+  });
+  await saveState();
+  closeModal();
+  renderMatriculas();
+  alert('✅ Cambios aplicados a '+folios.length+' matrículas.');
+}
+
 // Puebla el <select> de grupo leyendo STATE.cursos EN VIVO al momento de llamarse —
 // así cualquier grupo creado después de la matrícula (incluso en otra pestaña/sesión
 // sincronizada por Firebase) aparece de inmediato la próxima vez que se abre este modal.
@@ -2317,60 +2400,8 @@ async function eliminarMatriculasSeleccionadas(){
   renderMatriculas();
   buildSidebar();
 }
-async function eliminarMatricula(folio){
-  const m=STATE.matrículas.find(x=>x.folio===folio);
-  if(!confirm(`¿Eliminar matrícula #${folio} de ${m?.alumno}?\nEsta acción no se puede deshacer.`))return;
-  STATE.matrículas=STATE.matrículas.filter(x=>x.folio!==folio);
-  if(STATE.autorizacionesPago) STATE.autorizacionesPago=STATE.autorizacionesPago.filter(a=>a.folio!==folio||a.estado!=='pendiente');
-  await saveState();renderMatriculas();buildSidebar();
-}
 
 
-function descargarContratoHTML(m){
-  // Word-compatible HTML (.doc) — opens natively in Microsoft Word
-  var logoImg = typeof LOGO_URI!=='undefined'&&LOGO_URI?'<img src="'+LOGO_URI+'" style="height:60px;display:block;margin:0 auto 10px auto">':'';
-  var body = '<!DOCTYPE html>'
-    + '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">'
-    + '<head><meta charset="UTF-8">'
-    + '<style>'
-    + 'body{font-family:Arial,sans-serif;font-size:11pt;margin:2cm}'
-    + 'h1{font-size:14pt;text-align:center;font-weight:bold;margin-bottom:6pt}'
-    + 'h2{font-size:12pt;font-weight:bold;border-bottom:1px solid #333;padding-bottom:3pt;margin-top:12pt}'
-    + '.row{margin:4pt 0;display:flex;gap:8pt}'
-    + '.lbl{font-weight:bold;min-width:130pt}'
-    + '.firma-block{margin-top:60pt;display:flex;justify-content:space-around;text-align:center}'
-    + '.firma-line{border-top:1px solid #000;width:160pt;padding-top:4pt;font-size:9pt}'
-    + '</style></head><body>'
-    + logoImg
-    + '<h1>CONTRATO DE PRESTACIÓN DE SERVICIOS EDUCATIVOS</h1>'
-    + '<h2>Datos del Contrato</h2>'
-    + '<div class="row"><span class="lbl">Folio:</span><span>#'+m.folio+'</span></div>'
-    + '<div class="row"><span class="lbl">Fecha:</span><span>'+(m.fecha||m.fechaISO||'')+'</span></div>'
-    + '<h2>Datos del Alumno</h2>'
-    + '<div class="row"><span class="lbl">Alumno:</span><span>'+m.alumno+'</span></div>'
-    + (m.nacimiento?'<div class="row"><span class="lbl">Fecha de nacimiento:</span><span>'+m.nacimiento+'</span></div>':'')
-    + (m.titular&&m.titular!==m.alumno?'<div class="row"><span class="lbl">Tutor/Titular:</span><span>'+m.titular+'</span></div>':'')
-    + (m.email?'<div class="row"><span class="lbl">Email:</span><span>'+m.email+'</span></div>':'')
-    + (m.telefono?'<div class="row"><span class="lbl">Teléfono:</span><span>'+m.telefono+'</span></div>':'')
-    + '<h2>Datos del Servicio</h2>'
-    + '<div class="row"><span class="lbl">Curso:</span><span>'+m.curso+'</span></div>'
-    + (m.grupoNombre?'<div class="row"><span class="lbl">Grupo:</span><span>'+m.grupoNombre+'</span></div>':'')
-    + (m.salon?'<div class="row"><span class="lbl">Salón:</span><span>'+m.salon+'</span></div>':'')
-    + '<div class="row"><span class="lbl">Costo acordado:</span><span>$'+(m.primerPago||0)+' MXN</span></div>'
-    + (m.notas?'<div class="row"><span class="lbl">Notas:</span><span>'+m.notas+'</span></div>':'')
-    + '<h2>Acuerdo</h2>'
-    + '<p>Ambas partes conocen y aceptan los términos, condiciones y reglamento de los servicios educativos de <strong>NOVA IA Academy</strong>.</p>'
-    + '<div class="firma-block">'
-    + '<div class="firma-line">Firma del Alumno / Tutor<br>'+m.alumno+'</div>'
-    + '<div class="firma-line">Director<br>NOVA IA Academy</div>'
-    + '</div></body></html>';
-  var blob = new Blob([body], {type:'application/msword'});
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'Contrato-'+m.folio+'-'+m.alumno.replace(/[^a-zA-Z0-9]/g,'_')+'.doc';
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
 
 async function descargarContrato(folio){
   var m=STATE.matrículas.find(function(x){return x.folio===folio;});
@@ -2956,62 +2987,6 @@ function precargarPago(folio){
 }
 
 // ── Promociones ────────────────────────────────
-function buildPromociones(){
-  const cm=monthStr();
-  const promos=STATE.promociones;
-  return`
-  ${hasPerm('gestionar_promociones')?`
-  <div class="card fade-in" style="max-width:640px;margin-bottom:20px">
-    <div style="font-size:15px;font-weight:700;margin-bottom:16px"><i class="ti ti-plus"></i> ${t('promo_nueva_titulo')}</div>
-    <div class="form-grid">
-      <div class="form-group span2"><label class="flbl">${t('promo_campo_nombre')}</label><input id="np-nombre" placeholder="Ej: Pago adelantado 3 mesesón *</label><input id="np-nombre" placeholder="Ej: Pago adelantado 3 meses"></div>
-      <div class="form-group span2"><label class="flbl">Descripción</label><textarea id="np-desc" rows="2" placeholder="Descripción o condiciones de la promoción…"></textarea></div>
-      <div class="form-group"><label class="flbl">${t('promo_campo_tipo')}</label>
-        <select id="np-tipo">
-          <option value="porcentaje">${t('promo_tipo_pct')}</option>
-          <option value="fijo">${t('promo_tipo_fijo')}</option>
-        </select>
-      </div>
-      <div class="form-group"><label class="flbl">${t('promo_campo_valor')}</label><input type="number" id="np-valor" min="0" step="0.01" placeholder="10 para 10% o 50 para $50/mes"></div>
-      <div class="form-group"><label class="flbl">Meses mínimos para aplicar</label><input type="number" id="np-min" min="1" value="2" placeholder="2"></div>
-      <div class="form-group span2"><label class="flbl">Cursos aplicables</label>
-        ${buildPromoCursosPanel('np','todos')}
-      </div>
-      <div class="form-group"><label class="flbl">${t('promo_campo_inicio')}</label><input type="date" id="np-inicio" value="${todayISO()}"></div>
-      <div class="form-group"><label class="flbl">${t('promo_campo_fin')}</label><input type="date" id="np-fin"></div>
-    </div>
-    <div class="form-actions">
-      <button class="btn-primary" onclick="guardarPromo()"><i class="ti ti-tag"></i> ${t('promo_crear')}</button><!--ón</button>
-    </div>
-  </div>`:''}
-  <div style="font-size:13px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">${t('promo_registradas')} (${promos.length})</div>
-  ${promos.length===0?`<div class="empty" style="padding:30px"><div class="empty-icon">🏷️</div><h3>${t('promo_sin')}</h3><p>Crea tu primera promoción de pago adelantado</p></div>`:
-  promos.map(p=>{
-    const vigente=p.activa&&p.fechaFin>=cm;
-    const usosTotal=STATE.pagosRegulares.filter(pg=>pg.promoId===p.id).length;
-    return`<div class="promo-card">
-      <div class="promo-icon">🏷️</div>
-      <div style="flex:1">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
-          <span style="font-weight:700;font-size:15px">${p.nombre}</span>
-          ${vigente?'<span class="badge badge-green">✓ Vigente</span>':p.activa?'<span class="badge badge-warn">⏰ Expirada</span>':'<span class="badge badge-neutral">Inactiva</span>'}
-        </div>
-        ${p.descripcion?`<div style="font-size:12px;color:var(--text2);margin-bottom:6px">${p.descripcion}</div>`:''}
-        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text3)">
-          <span><strong style="color:var(--text2)">Descuento:</strong> ${p.tipo==='porcentaje'?p.valor+'%':'$'+p.valor+'/mes'}</span>
-          <span><strong style="color:var(--text2)">Mín:</strong> ${p.mesesMinimos} mes${p.mesesMinimos>1?'es':''}</span>
-          <span><strong style="color:var(--text2)">Vigencia:</strong> ${mesLabel(p.fechaInicio)} → ${p.fechaFin?mesLabel(p.fechaFin):'∞'}</span>
-          <span><strong style="color:var(--text2)">Cursos:</strong> ${p.cursosAplicables==='todos'?'Todos':p.cursosAplicables}</span>
-          <span><strong style="color:var(--text2)">Usos:</strong> ${usosTotal}</span>
-        </div>
-      </div>
-      ${hasPerm('gestionar_promociones')?`<div style="display:flex;gap:6px;flex-shrink:0">
-        <button class="btn-${p.activa?'warn':'green'} btn-sm" onclick="togglePromo('${p.id}')">${p.activa?t('promo_desactivar'):t('promo_activar')}</button>
-        <button class="btn-danger btn-sm" onclick="eliminarPromo('${p.id}')"><i class="ti ti-trash"></i></button>
-      </div>`:''}
-    </div>`;
-  }).join('')}`;
-}
 
 
 function buildPromoCursosPanel(prefix, selectedValue){
@@ -3137,13 +3112,6 @@ async function autorizarPromo(id){
   if(currentTab==='dios')renderModoDios();else renderPagoTab();
   refreshCurrentView(); // real-time: refresca cualquier vista activa (Nueva Matrícula, etc.)
 }
-async function togglePromo(id){
-  var p = (STATE.promociones||[]).find(function(x){return x.id===id;});
-  if(!p) return;
-  p.activa = !p.activa;
-  await saveState();
-  renderPagos();
-}
 
 async function eliminarPromo(id){
   if(!puedeAutorizarPromos()&&STATE.promociones.find(x=>x.id===id)?.estado==='autorizada'){alert('No tienes permisos para eliminar esta promoción.');return;}
@@ -3160,15 +3128,6 @@ async function eliminarPromo(id){
 
 // OLD guardarEdicionCurso removed
 
-async function quickEditFechaFin(nombre, btn) {
-  const c=STATE.cursos.find(x=>x.nombre===nombre);
-  if(!c)return;
-  const newFin=prompt(t('cur_fecha_fin')+' (YYYY-MM-DD):', c.fechaFin||'');
-  if(newFin===null)return;
-  const idx=STATE.cursos.findIndex(x=>x.nombre===nombre);
-  STATE.cursos[idx].fechaFin=newFin||null;
-  await saveState();renderCursos();
-}
 // ════════════════════════════════════════════════
 //  ALUMNOS, CURSOS, USUARIOS
 // ════════════════════════════════════════════════
@@ -4081,6 +4040,11 @@ function renderProyeccion() {
       <div class="stat-val">${pronto.length}</div>
       <div class="stat-sub">${t('proy_alerta_fin')} (60 días)</div>
     </div>
+    <div class="stat-card" style="--stripe:#a855f7">
+      <div class="stat-label">💸 Nómina instructores (a pagar)</div>
+      <div class="stat-val" style="font-size:19px">${fmtMXN(calcNominaInstructoresMes(monthStr()))}</div>
+      <div class="stat-sub">horas de ${mesLabel(prevMonth(monthStr()))}</div>
+    </div>
     <div class="stat-card" style="--stripe:#6366f1">
       <div class="stat-label">📚 Cursos activos hoy</div>
       <div class="stat-val">${STATE.cursos.filter(c=>{const f=c.fechaFin?new Date(c.fechaFin+'T00:00:00'):null;return!f||f>=new Date();}).length}</div>
@@ -4145,6 +4109,20 @@ function renderProyeccion() {
     <div style="font-size:13px;color:var(--text2)">
       <strong style="color:var(--accent);font-size:18px">${activos.length}</strong> ${t('proy_alumnos_activos')}
       · <strong style="color:var(--green)">${fmtMXN(totalIncome)}</strong> ${t('proy_ingresos_min')}
+    </div>
+  </div>
+
+  <!-- NÓMINA INSTRUCTORES DEL MES SELECCIONADO -->
+  <div class="card fade-in" style="margin-bottom:16px;border-left:3px solid #a855f7">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div>
+        <div style="font-size:12px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px">💸 Nómina instructores — ${mesLabel(proyMes)}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Horas finalizadas en ${mesLabel(prevMonth(proyMes))} (se pagan en ${mesLabel(proyMes)})</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:18px;font-weight:700;color:#a855f7">${fmtMXN(calcNominaInstructoresMes(proyMes))}</div>
+        <div style="font-size:11px;color:var(--text3)">Ingreso neto estimado: <strong style="color:var(--green)">${fmtMXN(totalIncome - calcNominaInstructoresMes(proyMes))}</strong></div>
+      </div>
     </div>
   </div>
 
@@ -4767,18 +4745,6 @@ function renderInactivos() {
   </div>`}`;
 }
 
-async function reactivarAlumno(id) {
-  const a=STATE.alumnosInactivos.find(x=>x.id===id);
-  if(!a||!confirm(t('inac_reactivar_confirm')+a.alumno+t('inac_reactivar_confirm2')))return;
-  // Restore original matrículas
-  (a.matrículasOriginales||[]).forEach(m=>{
-    if(!STATE.matrículas.find(x=>x.folio===m.folio)) STATE.matrículas.push({...m});
-  });
-  STATE.alumnosInactivos=STATE.alumnosInactivos.filter(x=>x.id!==id);
-  await saveState();
-  renderInactivos();
-  buildSidebar();
-}
 
 async function eliminarInactivoPermanente(id) {
   const a=STATE.alumnosInactivos.find(x=>x.id===id);
@@ -5326,16 +5292,6 @@ function actualizarCursoGrupo() {
   actualizarCostoBase();
 }
 
-function actualizarSalonGrupo() {
-  const cursoNombre = document.getElementById('f-curso')?.value;
-  const grupoId = document.getElementById('f-grupo')?.value;
-  const salonSel = document.getElementById('f-salon');
-  if(!cursoNombre||!grupoId||!salonSel) return;
-  const curso = STATE.cursos.find(c=>c.nombre===cursoNombre);
-  const grupo = curso?.grupos?.find(g=>g.id===grupoId);
-  if(grupo?.salon) salonSel.value=grupo.salon;
-  actualizarCostoBase();
-}
 
 function togglePowerMenu(){
   const m=document.getElementById('power-menu');
@@ -5453,46 +5409,6 @@ function toggleGrupos(id){
   if(ico) ico.style.transform=open?'rotate(90deg)':'rotate(0deg)';
 }
 
-function buildCursosMultiselect(selectedValue, prefix){
-  // Build the cursos multi-select HTML for promo forms
-  // selectedValue: 'todos' or comma-separated 'CourseName' or 'CourseName|grupoId'
-  const lista = selectedValue && selectedValue!=='todos' ? selectedValue.split(',').map(s=>s.trim()) : null;
-  function isSelected(val){
-    if(!lista) return true; // 'todos' = all selected
-    return lista.some(function(s){ return s===val || s.split('|')[0]===val; });
-  }
-  var rows = '';
-  STATE.cursos.forEach(function(c){
-    var grupos = c.grupos||[];
-    var cSel = isSelected(c.nombre);
-    rows += '<label style="display:flex;align-items:center;gap:8px;padding:5px 7px;cursor:pointer;border-radius:6px" onmouseover="this.style.background=\'var(--surface2)\'" onmouseout="this.style.background=\'\'">'
-      +'<input type="checkbox" class="'+prefix+'-chk" value="'+c.nombre+'"'+(cSel?' checked':'')+'  onchange="updateCursoAllCheckEp(\''+prefix+'\')">'
-      +'<span style="font-weight:500;font-size:13px">📚 '+c.nombre+'</span></label>';
-    grupos.forEach(function(g){
-      var gVal = c.nombre+'|'+g.id;
-      var gSel = isSelected(gVal)||cSel;
-      rows += '<label style="display:flex;align-items:center;gap:8px;padding:3px 7px 3px 20px;cursor:pointer;border-radius:6px;font-size:12px;color:var(--text2)" onmouseover="this.style.background=\'var(--surface2)\'" onmouseout="this.style.background=\'\'">'
-        +'<input type="checkbox" class="'+prefix+'-chk" value="'+gVal+'"'+(gSel?' checked':'')+'  onchange="updateCursoAllCheckEp(\''+prefix+'\')">'
-        +'<span>└ '+(g.nombre||'Grupo')+'</span></label>';
-    });
-  });
-  return '<label style="display:flex;align-items:center;gap:8px;padding:6px 7px;border-bottom:1px solid var(--border2);margin-bottom:4px;font-weight:600;cursor:pointer">'
-    +'<input type="checkbox" id="'+prefix+'-all" onchange="document.querySelectorAll(\'.\'+\''+prefix+'\'+\'-chk\').forEach(function(c){c.checked=this.checked;})" '
-    +(!lista?'checked':'')+'>'
-    +'<span>Todos los cursos</span></label>'
-    + rows;
-}
-function updateCursoAllCheckEp(prefix){
-  var all=[...document.querySelectorAll('.'+prefix+'-chk')];
-  var el=document.getElementById(prefix+'-all');
-  if(el) el.checked=all.every(function(c){return c.checked;});
-}
-function getCursosFromForm(prefix){
-  var allEl=document.getElementById(prefix+'-all');
-  if(allEl&&allEl.checked) return 'todos';
-  var checked=[...document.querySelectorAll('.'+prefix+'-chk:checked')].map(function(cb){return cb.value;});
-  return checked.length?checked.join(','):'todos';
-}
 
 function showModalEditarPromo(id){
   const p=STATE.promociones.find(x=>x.id===id);
@@ -5551,59 +5467,6 @@ function showModalEditarPromo(id){
   </div></div>`;
 }
 
-function showModalInfoPromo(id){
-  const p=STATE.promociones.find(x=>x.id===id);
-  if(!p) return;
-  const usos=STATE.pagosRegulares.filter(function(pg){return pg.promoId===p.id;}).length;
-  const cursosLabel=p.cursosAplicables==='todos'?'Todos los cursos'
-    :p.cursosAplicables.split(',').map(function(s){
-      var parts=s.split('|');
-      if(parts.length>1){
-        var c=STATE.cursos.find(function(x){return x.nombre===parts[0];});
-        var g=c&&c.grupos&&c.grupos.find(function(x){return x.id===parts[1];});
-        return parts[0]+(g?' → '+(g.nombre||'Grupo'):'');
-      }
-      return s;
-    }).join('<br>');
-  document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay">
-  <div class="modal" style="max-width:520px">
-    <div class="modal-hdr">
-      <div class="modal-title"><i class="ti ti-tag"></i> ${p.nombre}</div>
-      <button class="modal-close" onclick="closeModal()">✕</button>
-    </div>
-    <div class="modal-body">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">
-        <div style="background:var(--surface2);border-radius:8px;padding:12px">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Descuento</div>
-          <div style="font-weight:700;font-size:18px;color:var(--green)">${p.tipo==='porcentaje'?p.valor+'%':'$'+p.valor+' por período'}</div>
-        </div>
-        <div style="background:var(--surface2);border-radius:8px;padding:12px">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Mínimo de meses</div>
-          <div style="font-weight:700;font-size:18px">${p.mesesMinimos} mes${p.mesesMinimos!==1?'es':''}</div>
-        </div>
-        <div style="background:var(--surface2);border-radius:8px;padding:12px">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Vigencia</div>
-          <div style="font-size:13px">${p.fechaInicio||'—'} → ${p.fechaFin&&p.fechaFin!=='2099-12'?p.fechaFin:'Sin fecha de fin'}</div>
-        </div>
-        <div style="background:var(--surface2);border-radius:8px;padding:12px">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:4px">Usos registrados</div>
-          <div style="font-weight:700;font-size:18px;color:var(--accent)">${usos}</div>
-        </div>
-      </div>
-      ${p.descripcion?`<div style="background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:12px;font-size:13px;color:var(--text2)">${p.descripcion}</div>`:''}
-      <div style="background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:12px">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text3);margin-bottom:6px">Cursos aplicables</div>
-        <div style="font-size:13px;line-height:1.7">${cursosLabel}</div>
-      </div>
-      ${p.autorizadaPor?`<div style="font-size:12px;color:var(--text3)">✅ Autorizada por <strong>${p.autorizadaPor}</strong>${p.autorizadaEn?' el '+new Date(p.autorizadaEn).toLocaleDateString('es-MX',{day:'2-digit',month:'long',year:'numeric'}):''}</div>`:''}
-      <div style="margin-top:16px;display:flex;justify-content:space-between;align-items:center">
-        ${puedeAutorizarPromos()?`<button class="btn-warn btn-sm" onclick="closeModal();autorizarPromo('${p.id}')">Desactivar para editar</button>`:'<span></span>'}
-        <button class="btn-ghost" onclick="closeModal()">Cerrar</button>
-      </div>
-    </div>
-  </div></div>`;
-}
 
 async function guardarEdicionPromo(id, estadoAnterior){
   const p=STATE.promociones.find(x=>x.id===id);
@@ -5674,14 +5537,6 @@ function showDetallesPromo(id){
   </div></div>`;
 }
 
-function selMetodo(el){
-  ['cash','transfer','card'].forEach(function(v){
-    var lb=document.getElementById('lbl-met-'+v);
-    if(lb) lb.style.borderColor='var(--border)';
-  });
-  var lb=document.getElementById('lbl-met-'+el.value);
-  if(lb) lb.style.borderColor='var(--green)';
-}
 function updateFirstPaymentStatus(){
   var val=parseFloat(document.getElementById('f-pago')?.value)||0;
   var cont=document.getElementById('f-pago-status-cont');
@@ -5716,6 +5571,19 @@ function getPrecioXGrupo(n, paquetes){
   return tiers[tiers.length-1].precio;
 }
 
+function promoAplicaACursoGrupo(promo, cursoNombre, grupoId){
+  if(!promo.cursosAplicables || promo.cursosAplicables==='todos') return true;
+  if(!cursoNombre) return false;
+  var lista = promo.cursosAplicables.split(',').map(function(s){return s.trim();});
+  return lista.some(function(entry){
+    var partes = entry.split('|');
+    var cn = partes[0], gid = partes[1];
+    if(cn !== cursoNombre) return false;
+    if(!gid) return true; // entrada aplica a TODO el curso, sin importar el grupo
+    return gid === (grupoId||''); // entrada aplica SOLO a ese grupo específico
+  });
+}
+
 function actualizarCostoBase(){
   var promoCont = document.getElementById('f-promo-cont');
   var cursoNombre = document.getElementById('f-curso')?.value;
@@ -5724,14 +5592,25 @@ function actualizarCostoBase(){
   recalcPagoConPromo();
 }
 
-function recalcPagoConPromo(){
+function recalcPagoConPromo(soloRecalcular){
   var cursoNombre = document.getElementById('f-curso')?.value;
   var curso = cursoNombre ? (STATE.cursos||[]).find(function(c){return c.nombre===cursoNombre;}) : null;
   var pagoEl = document.getElementById('f-pago');
   var pagoMensualEl = document.getElementById('f-pago-mensual');
   var hintEl = document.getElementById('f-promo-hint');
+  var promoSel = document.getElementById('f-promo');
   if(!curso || !pagoEl) return;
   var base = curso.costoBase || 0;
+  // Reconstruir las OPCIONES del select cada vez que cambia el curso — solo promos
+  // realmente aplicables a ESTE curso (cursosAplicables='todos' o que lo incluya).
+  if(promoSel && !soloRecalcular){
+    var vigentes = getPromosVigentes(monthStr()).filter(function(p){
+      return promoAplicaACursoGrupo(p, cursoNombre, null);
+    });
+    var valorPrevio = promoSel.value;
+    promoSel.innerHTML = '<option value="">— Sin promoción —</option>' + buildPromoOpts(vigentes);
+    if(vigentes.some(function(p){return p.id===valorPrevio;})) promoSel.value = valorPrevio;
+  }
   var promoId = document.getElementById('f-promo')?.value;
   var precioFinal = base, hintTxt = '';
   if(promoId){
@@ -6314,11 +6193,6 @@ function horarioHastaDeSesion(s){
   var d=new Date(s.fecha+'T'+hh+':00');
   return isNaN(d.getTime())?null:d;
 }
-function finDeTramoConTope(s){
-  var ahora=new Date();
-  var limite=horarioHastaDeSesion(s);
-  return (limite&&ahora>limite)?limite:ahora;
-}
 
 async function pausarClaseHorario(sesionId, rol){
   var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
@@ -6716,6 +6590,46 @@ async function adminBorrarSesion(sesionId, instrId, rol){
   showModalSesionesInstructor(instrId, s.mes);
 }
 
+async function adminEditarHorasTramo(sesionId, instrId, rol, tramoIdx){
+  var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
+  if(!s)return;
+  var campoTramos=rol==='principal'?'tramosP':'tramosA';
+  var campoHoras=rol==='principal'?'horasInstructor':'horasAsistente';
+  var tr=(s[campoTramos]||[])[tramoIdx];
+  if(!tr)return;
+  function fmtHHMM(iso){ if(!iso) return ''; var d=new Date(iso); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+  var horaIniActual=fmtHHMM(tr.inicio);
+  var horaFinActual=tr.fin?fmtHHMM(tr.fin):horaIniActual;
+  var reHora=/^([01]\d|2[0-3]):[0-5]\d$/;
+
+  var nuevaIni=prompt('Hora de INICIO de esta clase ('+s.fecha+'), formato HH:MM 24hrs:', horaIniActual);
+  if(nuevaIni===null) return;
+  nuevaIni=nuevaIni.trim();
+  if(!reHora.test(nuevaIni)){ alert('Formato de hora inválido. Usa HH:MM, por ejemplo 18:00'); return; }
+
+  var nuevaFin=prompt('Hora de FIN de esta clase ('+s.fecha+'), formato HH:MM 24hrs:', horaFinActual);
+  if(nuevaFin===null) return;
+  nuevaFin=nuevaFin.trim();
+  if(!reHora.test(nuevaFin)){ alert('Formato de hora inválido. Usa HH:MM, por ejemplo 20:00'); return; }
+
+  var partsI=nuevaIni.split(':').map(Number), partsF=nuevaFin.split(':').map(Number);
+  var dIni=new Date(s.fecha+'T00:00:00'); dIni.setHours(partsI[0],partsI[1],0,0);
+  var dFin=new Date(s.fecha+'T00:00:00'); dFin.setHours(partsF[0],partsF[1],0,0);
+  if(dFin<=dIni) dFin.setDate(dFin.getDate()+1); // por si la clase cruza medianoche
+
+  tr.inicio=dIni.toISOString();
+  tr.fin=dFin.toISOString();
+  tr.horas=+((dFin-dIni)/3600000).toFixed(2);
+
+  // El total de la sesión se recalcula como SUMA de todos los tramos de este rol,
+  // nunca como resta/suma incremental, para no arrastrar errores de redondeo.
+  var tramosRol=s[campoTramos]||[];
+  s[campoHoras]=+tramosRol.reduce(function(acc,t){return acc+(t.horas||0);},0).toFixed(2);
+
+  await saveState();
+  showModalSesionesInstructor(instrId, s.mes);
+}
+
 async function adminBorrarTramo(sesionId, instrId, rol, tramoIdx){
   var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
   if(!s)return;
@@ -6724,29 +6638,15 @@ async function adminBorrarTramo(sesionId, instrId, rol, tramoIdx){
   var tramos=s[campoTramos]||[];
   var tr=tramos[tramoIdx];
   if(!tr)return;
-  if(!confirm('¿Borrar este tramo de '+(tr.horas||0).toFixed(2)+' h?')) return;
-  s[campoHoras]=Math.max(0,(s[campoHoras]||0)-(tr.horas||0));
+  if(!confirm('¿Borrar esta clase de '+(tr.horas||0).toFixed(2)+' h del '+s.fecha+'?')) return;
   tramos.splice(tramoIdx,1);
   s[campoTramos]=tramos;
+  // Recalcular como SUMA del resto de tramos (consistente con adminEditarHorasTramo).
+  s[campoHoras]=+tramos.reduce(function(acc,t){return acc+(t.horas||0);},0).toFixed(2);
   if(!tramos.length){
-    if(rol==='principal'){s.estadoP=null; s.horasInstructor=0;}
-    else{s.estadoA=null; s.horasAsistente=0;}
+    if(rol==='principal'){s.estadoP=null;}
+    else{s.estadoA=null;}
   }
-  await saveState();
-  showModalSesionesInstructor(instrId, s.mes);
-}
-
-async function adminEditarHorasTramo(sesionId, instrId, rol, tramoIdx){
-  var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
-  if(!s)return;
-  var campoTramos=rol==='principal'?'tramosP':'tramosA';
-  var campoHoras=rol==='principal'?'horasInstructor':'horasAsistente';
-  var tr=(s[campoTramos]||[])[tramoIdx];
-  if(!tr)return;
-  var nuevo=parseFloat(prompt('Horas para este tramo (actual: '+((tr.horas||0).toFixed(2))+'):',(tr.horas||0)));
-  if(isNaN(nuevo)||nuevo<0)return;
-  s[campoHoras]=Math.max(0,(s[campoHoras]||0)-(tr.horas||0)+nuevo);
-  tr.horas=nuevo; tr.fin=tr.fin||new Date().toISOString();
   await saveState();
   showModalSesionesInstructor(instrId, s.mes);
 }
@@ -6759,10 +6659,17 @@ function showModalSesionesInstructor(instrId, mesVer){
   var sesiones=(STATE.sesionesClase||[]).filter(function(s){
     return s.mes===cm&&(s.instructorId===instrId||s.asistenteId===instrId
       ||s.instructorId===altId||s.asistenteId===altId);
-  });
+  }).sort(function(a,b){return (a.fecha||'').localeCompare(b.fecha||'');});
   var mc=document.getElementById('modal-container');
   if(!mc)return;
   function fmtHora(iso){if(!iso)return '?';var d=new Date(iso);return d.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});}
+  function fmtDiaLargo(fechaYMD){
+    if(!fechaYMD) return '—';
+    var d=new Date(fechaYMD+'T00:00:00');
+    var dia=d.toLocaleDateString('es-MX',{weekday:'long'});
+    dia=dia.charAt(0).toUpperCase()+dia.slice(1);
+    return dia+' '+fmtFecha(fechaYMD);
+  }
   var totalHoras=0;
   var rows=sesiones.length===0
     ?'<div style="color:var(--text3);padding:16px">Sin sesiones este mes.</div>'
@@ -6777,18 +6684,17 @@ function showModalSesionesInstructor(instrId, mesVer){
       var rol2=esP?'principal':'asistente';
       var tramos=esP?(s.tramosP||[]):(s.tramosA||[]);
       var tramosHtml=tramos.length===0
-        ?'<div style="font-size:11px;color:var(--text3)">Sin tramos</div>'
+        ?'<div style="font-size:12px;color:var(--text3);padding:4px 0">Sin clase registrada (0 horas).</div>'
         :tramos.map(function(tr,ti){
           var durH=(tr.horas||0).toFixed(2);
           var ini=fmtHora(tr.inicio); var fin2=tr.fin?fmtHora(tr.fin):'en curso';
           var sid=s.id; var r2=rol2;
-          return '<div style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px;border-bottom:1px dashed var(--border)">'
-            +'<span style="color:var(--text2);font-family:monospace;min-width:130px">'+ini+' → '+fin2+'</span>'
-            +'<span style="font-weight:700;font-family:monospace;color:var(--accent)">'+durH+' h</span>'
-            +'<button style="font-size:10px;padding:1px 6px;background:none;border:1px solid var(--border);border-radius:4px;cursor:pointer"'
+          return '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:12px;border-bottom:1px dashed var(--border)">'
+            +'<span style="color:var(--text2)">Clase de <strong style="font-family:monospace">'+ini+'</strong> a <strong style="font-family:monospace">'+fin2+'</strong> ('+durH+' horas)</span>'
+            +'<button style="margin-left:auto;font-size:10px;padding:1px 6px;background:none;border:1px solid var(--border);border-radius:4px;cursor:pointer;flex-shrink:0"'
             +' data-sid="'+sid+'" data-iid="'+instrId+'" data-rol="'+r2+'" data-ti="'+ti+'"'
-            +' onclick="adminEditarHorasTramo(this.dataset.sid,this.dataset.iid,this.dataset.rol,parseInt(this.dataset.ti))">✏️</button>'
-            +'<button style="font-size:10px;padding:1px 6px;background:none;border:1px solid #f5c0bb;color:var(--danger);border-radius:4px;cursor:pointer"'
+            +' onclick="adminEditarHorasTramo(this.dataset.sid,this.dataset.iid,this.dataset.rol,parseInt(this.dataset.ti))">✏️ Editar horario</button>'
+            +'<button style="font-size:10px;padding:1px 6px;background:none;border:1px solid #f5c0bb;color:var(--danger);border-radius:4px;cursor:pointer;flex-shrink:0"'
             +' data-sid="'+sid+'" data-iid="'+instrId+'" data-rol="'+r2+'" data-ti="'+ti+'"'
             +' onclick="adminBorrarTramo(this.dataset.sid,this.dataset.iid,this.dataset.rol,parseInt(this.dataset.ti))">🗑</button>'
             +'</div>';
@@ -6796,16 +6702,16 @@ function showModalSesionesInstructor(instrId, mesVer){
       var finBtn=est==='iniciada'
         ?'<button class="btn-ghost btn-sm" data-sid="'+s.id+'" data-rol="'+rol2+'" onclick="adminFinalizarSesion(this.dataset.sid,this.dataset.rol)" style="font-size:10px">⏹ Finalizar</button>':'';
       return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">'
-        +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">'
-        +'<div style="flex:1"><div style="font-weight:700;font-size:13px">'+nombre+'</div>'
-        +'<div style="font-size:11px;color:var(--text3)">'+s.fecha+' · '+(esP?'Principal':'Asistente')
+        +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
+        +'<div style="flex:1"><div style="font-weight:700;font-size:13px">'+fmtDiaLargo(s.fecha)+'</div>'
+        +'<div style="font-size:11px;color:var(--text3)">'+nombre+' · '+(esP?'Principal':'Asistente')
         +' · <span style="color:'+col+'">'+( est||'sin iniciar')+'</span></div></div>'
-        +'<div style="font-family:monospace;font-weight:700;color:var(--green)">'+horas.toFixed(2)+' h</div>'
         +finBtn
         +'<button class="btn-danger btn-sm" data-sid="'+s.id+'" data-iid="'+instrId+'" data-rol="'+rol2+'"'
         +' onclick="adminBorrarSesion(this.dataset.sid,this.dataset.iid,this.dataset.rol)" style="font-size:10px">🗑 Borrar día</button>'
         +'</div>'
         +'<div>'+tramosHtml+'</div>'
+        +'<div style="margin-top:6px;font-size:12px;font-weight:700;color:var(--green)">Total de horas impartidas: '+horas.toFixed(2)+' hrs</div>'
         +'</div>';
     }).join('');
   var _cmParts=cm.split('-').map(Number);
@@ -6815,7 +6721,7 @@ function showModalSesionesInstructor(instrId, mesVer){
   mc.innerHTML='<div class="moverlay" style="z-index:9999">'
     +'<div class="modal" style="max-width:580px;max-height:90vh;overflow-y:auto">'
     +'<div class="modal-hdr" style="position:sticky;top:0;background:var(--surface);z-index:1">'
-    +'<div class="modal-title">📅 Sesiones — '+p.nombre+'</div>'
+    +'<div class="modal-title">📅 Calendario de clases — '+p.nombre+'</div>'
     +'<button class="modal-close" onclick="closeModal()">✕</button></div>'
     +'<div class="modal-body" style="padding:16px">'
     +'<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:10px">'
@@ -6824,10 +6730,10 @@ function showModalSesionesInstructor(instrId, mesVer){
     +'<button class="btn-ghost btn-sm" onclick="showModalSesionesInstructor(\''+instrId+'\',\''+mesSiguienteStr+'\')">Mes siguiente ›</button>'
     +'</div>'
     +'<div style="font-size:12px;color:var(--text3);margin-bottom:10px;text-align:center">'
-    +'⏱ Total: <strong style="color:var(--green)">'+totalHoras.toFixed(2)+' h</strong>'
-    +' · '+sesiones.length+' sesión'+(sesiones.length!==1?'es':'')+'</div>'
+    +'⏱ Total del mes: <strong style="color:var(--green)">'+totalHoras.toFixed(2)+' h</strong>'
+    +' · '+sesiones.length+' día'+(sesiones.length!==1?'s':'')+' con clase</div>'
     +'<div style="font-size:10px;color:var(--text3);margin-bottom:12px">'
-    +'✏️ editar horas · 🗑 borrar tramo · 🗑 Borrar día = reiniciar sesión completa</div>'
+    +'✏️ Editar horario = cambia hora de inicio/fin (recalcula horas automáticamente) · 🗑 Borrar día = reinicia la sesión completa</div>'
     +rows+'</div></div></div>';
 }
 
