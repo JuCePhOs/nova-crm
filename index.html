@@ -1023,7 +1023,7 @@ function fmtMXN(n){return new Intl.NumberFormat('es-MX',{style:'currency',curren
 function fmtFecha(iso){if(!iso)return'—';const[y,m,d]=iso.split('-');const meses=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];return`${parseInt(d)} de ${meses[parseInt(m)-1]} de ${y}`;}
 function mesLabel(ym){const[y,m]=ym.split('-');const n=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];return`${n[parseInt(m)-1]} ${y}`;}
 function monthStr(){const n=new Date();return`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;}
-function todayISO(){return new Date().toISOString().split('T')[0];}
+function todayISO(){var d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function calcEdad(nacISO){
   if(!nacISO)return null;
   var p=nacISO.split('-');
@@ -1751,6 +1751,11 @@ function renderDashboard(){
       <div class="stat-val">${promoActiva}</div>
       <div class="stat-sub">${STATE.cursos.length} ${t('dash_cursos_reg')}</div><div style="font-size:10px;color:var(--warn);margin-top:4px;font-weight:600">→ Ver promociones</div>
     </div>
+    <div class="stat-card" style="--stripe:#6366f1;cursor:pointer" onclick="navigate('cursos')" title="Ver cursos">
+      <div class="stat-label">📚 Cursos</div>
+      <div class="stat-val">${(STATE.cursos||[]).length}</div>
+      <div class="stat-sub">total registrados</div><div style="font-size:10px;color:#6366f1;margin-top:4px;font-weight:600">→ Ver cursos</div>
+    </div>
   </div>
   ${alumnosPendientes>0&&hasPerm('ver_pagos')?`
   <div style="background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:12px;padding:14px 18px;display:flex;align-items:center;gap:12px;margin-bottom:24px;cursor:pointer" onclick="navigate('pagos')">
@@ -1934,6 +1939,14 @@ function showModalNuevaMatricula(){
           </select>
         </div>
         <div class="form-group span2" id="f-multi-grupos-cont" style="display:none"></div>
+        <div class="form-group span2" id="f-promo-cont" style="display:none">
+          <label class="flbl">Promoción aplicable</label>
+          <select id="f-promo" onchange="recalcPagoConPromo()">
+            <option value="">— Sin promoción —</option>
+            `+promoOpts+`
+          </select>
+          <div id="f-promo-hint" style="font-size:11px;margin-top:4px;color:var(--text3)"></div>
+        </div>
         <div class="form-group span2">
           <label class="flbl">${t('mat_campo_titular')}</label>
           <input id="f-titular" placeholder="Nombre completo del titular/responsable">
@@ -2126,9 +2139,11 @@ async function guardarMatricula(){
     motivoAuth=prompt('⚠️ Este pago ($'+pagoVal.toLocaleString('es-MX')+') es menor al mínimo del curso ($'+minimoReq.toLocaleString('es-MX')+').\n\nLa matrícula se guardará, pero requiere autorización del Modo Dios antes de considerarse válida.\n\nExplica brevemente el motivo (ej. beca, promoción especial, caso particular):');
     if(motivoAuth===null){ return; } // canceló — no guardar nada
   }
+  var promoSelEl=document.getElementById('f-promo');
+  var promoAplicada=promoSelEl&&promoSelEl.value?promoSelEl.value:null;
   STATE.matrículas.push({folio,alumno,nacimiento:nac,curso,titular,email,telefono:tel,
     primerPago:parseFloat(pago),pagoTipo:pagoTipo,pagoMensual:pagoTipo==='unico'?null:pagoMensualFinal,
-    fecha:fmtFecha(fechaISO),fechaISO,notas,
+    fecha:fmtFecha(fechaISO),fechaISO,notas,promoAplicada,
     autorizacionPendiente:necesitaAutorizacion||false,
     createdAt:new Date().toISOString(),createdBy:currentUser.username});
   if(necesitaAutorizacion){
@@ -2172,12 +2187,17 @@ function showModalEditarMatricula(folio){
       <div class="form-grid">
         <div class="form-group span2"><label class="flbl">Alumno</label><input id="e-alumno" value="${m.alumno||''}"></div>
         <div class="form-group"><label class="flbl">Fecha de nacimiento</label><input type="date" id="e-nac" value="${m.nacimiento||''}"></div>
-        <div class="form-group"><label class="flbl">Curso</label><select id="e-curso"><option value="">— Selecciona —</option>${(STATE.cursos||[]).map(c=>`<option${c.nombre===m.curso?' selected':''}>${c.nombre}</option>`).join('')}</select></div>
+        <div class="form-group"><label class="flbl">Curso</label><select id="e-curso" onchange="actualizarGrupoEdicion()"><option value="">— Selecciona —</option>${(STATE.cursos||[]).map(c=>`<option${c.nombre===m.curso?' selected':''}>${c.nombre}</option>`).join('')}</select></div>
+        <div class="form-group" id="e-grupo-cont" style="display:none"><label class="flbl">Grupo</label><select id="e-grupo"></select></div>
         <div class="form-group span2"><label class="flbl">Titular</label><input id="e-titular" value="${m.titular||''}"></div>
         <div class="form-group"><label class="flbl">Correo</label><input type="email" id="e-email" value="${m.email||''}"></div>
         <div class="form-group"><label class="flbl">Teléfono</label><input id="e-tel" value="${m.telefono||''}"></div>
         <div class="form-group"><label class="flbl">Primer pago (MXN)</label><input type="number" id="e-pago" value="${m.primerPago||''}"></div>
         ${currentUser.role==='admin'?`<div class="form-group"><label class="flbl">${t('mat_campo_fecha')}</label><input type="date" id="e-fecha" value="${m.fechaISO||todayISO()}"></div>`:'<div></div>'}
+        ${puedeAutorizarPromos()?`<div class="form-group span2">
+          <label class="flbl">Creado por <span style="font-size:10px;color:var(--text3)">(determina a quién se le suman las comisiones de esta matrícula)</span></label>
+          <select id="e-creadopor">${(STATE.usuarios||[]).map(u=>`<option value="${u.username}"${u.username===m.createdBy?' selected':''}>${u.name||u.username} (${u.username})</option>`).join('')}</select>
+        </div>`:''}
       </div>
       <div class="form-actions">
         <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -2185,6 +2205,31 @@ function showModalEditarMatricula(folio){
       </div>
     </div>
   </div></div>`;
+  actualizarGrupoEdicion(m.grupoId||null);
+}
+
+// Puebla el <select> de grupo leyendo STATE.cursos EN VIVO al momento de llamarse —
+// así cualquier grupo creado después de la matrícula (incluso en otra pestaña/sesión
+// sincronizada por Firebase) aparece de inmediato la próxima vez que se abre este modal.
+function actualizarGrupoEdicion(grupoIdPreseleccionado){
+  var cursoNombre = document.getElementById('e-curso')?.value;
+  var cont = document.getElementById('e-grupo-cont');
+  var sel = document.getElementById('e-grupo');
+  if(!cont||!sel) return;
+  var curso = cursoNombre ? (STATE.cursos||[]).find(function(c){return c.nombre===cursoNombre;}) : null;
+  var grupos = curso&&curso.grupos ? curso.grupos : [];
+  if(!curso || grupos.length===0){
+    cont.style.display='none';
+    sel.innerHTML='';
+    return;
+  }
+  cont.style.display='block';
+  var preSel = grupoIdPreseleccionado!==undefined ? grupoIdPreseleccionado : sel.value;
+  sel.innerHTML = '<option value="">— Sin grupo específico —</option>'
+    + grupos.map(function(g){
+        var tag=[g.dia,g.horarioDesde&&g.horarioHasta?(g.horarioDesde+'–'+g.horarioHasta):''].filter(Boolean).join(' · ');
+        return '<option value="'+g.id+'"'+(g.id===preSel?' selected':'')+'>'+(g.nombre||'Grupo')+(tag?' ('+tag+')':'')+'</option>';
+      }).join('');
 }
 
 async function guardarEdicion(folio){
@@ -2212,6 +2257,15 @@ async function guardarEdicion(folio){
     alumno:document.getElementById('e-alumno').value.trim(),
     nacimiento:document.getElementById('e-nac').value,
     curso:nuevoCurso,
+    createdBy:(document.getElementById('e-creadopor')&&document.getElementById('e-creadopor').value)||STATE.matrículas[idx].createdBy,
+    grupoId:(document.getElementById('e-grupo')&&document.getElementById('e-grupo').value)||null,
+    grupoNombre:(function(){
+      var gEl=document.getElementById('e-grupo');
+      if(!gEl||!gEl.value) return null;
+      var c=(STATE.cursos||[]).find(function(x){return x.nombre===nuevoCurso;});
+      var g=c&&c.grupos?c.grupos.find(function(x){return x.id===gEl.value;}):null;
+      return g?g.nombre:null;
+    })(),
     titular:document.getElementById('e-titular').value.trim(),
     email:document.getElementById('e-email').value.trim(),
     telefono:document.getElementById('e-tel').value.trim(),
@@ -2329,7 +2383,9 @@ async function descargarContrato(folio){
   try{
     var D=docx;
     var Doc=D.Document,Par=D.Paragraph,TR=D.TextRun,AL=D.AlignmentType,Pk=D.Packer,Tbl=D.Table,TRw=D.TableRow,TC=D.TableCell,WT=D.WidthType,BS=D.BorderStyle,IR=D.ImageRun,Hdr=D.Header;
-    var FO=String(m.folio),FE=m.fecha||fmtFecha(m.fechaISO),TI=m.titular||'',TE=m.telefono||'',EM=m.email||'',AL2=m.alumno||'',NA=m.nacimiento?fmtFecha(m.nacimiento):'',CU=cursoGrupoLabel(m.curso||'',m.grupoNombre),PA=fmtMXN(parseFloat(String(m.primerPago||0).replace(/[^0-9.]/g,'')));
+    var FO=String(m.folio),FE=m.fecha||fmtFecha(m.fechaISO),TI=m.titular||'',TE=m.telefono||'',EM=m.email||'',AL2=m.alumno||'',NA=m.nacimiento?fmtFecha(m.nacimiento):'',CU=cursoGrupoLabel(m.curso||'',m.grupoNombre),PA=fmtMXN(parseFloat(String(m.primerPago||0).replace(/[^0-9.]/g,''))),
+      PM=fmtMXN(parseFloat(String((m.pagoMensual!=null?m.pagoMensual:m.primerPago)||0).replace(/[^0-9.]/g,''))),
+      esUnico=m.pagoTipo==='unico';
     function ar(t,o){o=o||{};return new TR({text:String(t||''),font:'Arial',size:(o.sz||10)*2,bold:!!o.b});}
     function pa(runs,o){o=o||{};return new Par({children:Array.isArray(runs)?runs:[ar(runs,o.ro||{})],alignment:o.al||AL.LEFT,spacing:{after:o.sp!==undefined?o.sp:120},indent:o.in?{left:o.in}:undefined});}
     var GB={style:BS.SINGLE,size:4,color:'CCCCCC'};
@@ -2388,7 +2444,11 @@ async function descargarContrato(folio){
         children:[
           pa([ar('Anexo 1 — Sobre Precios y Formas de Pago',{b:true,sz:11})],{al:AL.CENTER,sp:120}),
           pa([ar('Los pagos se realizarán a más tardar los 15 de cada mes. Un atraso genera un cargo de $200 pesos por semana.')],{sp:80}),
-          pa([ar('El primer pago según la forma de pago elegida: '),ar(PA+' MXN Pesos.',{b:true})],{sp:160}),
+          pa([ar('El primer pago según la forma de pago elegida: '),ar(PA+' MXN Pesos.',{b:true})],{sp:80}),
+          pa(esUnico
+            ?[ar('Este es un pago único; no aplican pagos subsecuentes.',{b:true})]
+            :[ar('Pagos mensuales siguientes de: '),ar(PM+' MXN Pesos.',{b:true})]
+          ,{sp:160}),
           sigTbl(TI+' / ______________________','','CUSTOMER: '+TI,''),
           pa([ar('')],{sp:160}),
           pa([ar('Factura en virtud del contrato Nº '+FO+' de '+FE+'.')],{sp:80}),
@@ -5656,6 +5716,40 @@ function getPrecioXGrupo(n, paquetes){
   return tiers[tiers.length-1].precio;
 }
 
+function actualizarCostoBase(){
+  var promoCont = document.getElementById('f-promo-cont');
+  var cursoNombre = document.getElementById('f-curso')?.value;
+  if(!cursoNombre){ if(promoCont) promoCont.style.display='none'; return; }
+  if(promoCont) promoCont.style.display='block';
+  recalcPagoConPromo();
+}
+
+function recalcPagoConPromo(){
+  var cursoNombre = document.getElementById('f-curso')?.value;
+  var curso = cursoNombre ? (STATE.cursos||[]).find(function(c){return c.nombre===cursoNombre;}) : null;
+  var pagoEl = document.getElementById('f-pago');
+  var pagoMensualEl = document.getElementById('f-pago-mensual');
+  var hintEl = document.getElementById('f-promo-hint');
+  if(!curso || !pagoEl) return;
+  var base = curso.costoBase || 0;
+  var promoId = document.getElementById('f-promo')?.value;
+  var precioFinal = base, hintTxt = '';
+  if(promoId){
+    var promo = (STATE.promociones||[]).find(function(p){return p.id===promoId;});
+    var razon = promoRazonInvalida(promo, 1, curso.nombre);
+    if(razon){
+      hintTxt = '⚠ '+razon;
+    } else if(promo){
+      var desc = promo.tipo==='porcentaje' ? +(base*promo.valor/100).toFixed(2) : promo.valor;
+      precioFinal = Math.max(0, +(base-desc).toFixed(2));
+      hintTxt = '✓ '+promo.nombre+': -'+fmtMXN(desc);
+    }
+  }
+  pagoEl.value = precioFinal;
+  if(pagoMensualEl && !pagoMensualEl.value) pagoMensualEl.value = precioFinal;
+  if(hintEl) hintEl.textContent = hintTxt;
+}
+
 function onCursoChangeMulti(){
   var cursoNombre = document.getElementById('f-curso')?.value;
   var curso = cursoNombre ? STATE.cursos.find(function(c){return c.nombre===cursoNombre;}) : null;
@@ -6595,7 +6689,7 @@ async function adminFinalizarSesion(sesionId, rol){
   }
   s[campoEstado]='finalizada';
   await saveState();
-  showModalSesionesInstructor(instrId);
+  showModalSesionesInstructor(instrId, s.mes);
 }
 
 async function adminBorrarSesion(sesionId, instrId, rol){
@@ -6616,7 +6710,7 @@ async function adminBorrarSesion(sesionId, instrId, rol){
     STATE.sesionesClase=(STATE.sesionesClase||[]).filter(function(x){return x.id!==sesionId;});
   }
   await saveState();
-  showModalSesionesInstructor(instrId);
+  showModalSesionesInstructor(instrId, s.mes);
 }
 
 async function adminBorrarTramo(sesionId, instrId, rol, tramoIdx){
@@ -6636,7 +6730,7 @@ async function adminBorrarTramo(sesionId, instrId, rol, tramoIdx){
     else{s.estadoA=null; s.horasAsistente=0;}
   }
   await saveState();
-  showModalSesionesInstructor(instrId);
+  showModalSesionesInstructor(instrId, s.mes);
 }
 
 async function adminEditarHorasTramo(sesionId, instrId, rol, tramoIdx){
@@ -6651,13 +6745,13 @@ async function adminEditarHorasTramo(sesionId, instrId, rol, tramoIdx){
   s[campoHoras]=Math.max(0,(s[campoHoras]||0)-(tr.horas||0)+nuevo);
   tr.horas=nuevo; tr.fin=tr.fin||new Date().toISOString();
   await saveState();
-  showModalSesionesInstructor(instrId);
+  showModalSesionesInstructor(instrId, s.mes);
 }
 
-function showModalSesionesInstructor(instrId){
+function showModalSesionesInstructor(instrId, mesVer){
   var p=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
   if(!p) return;
-  var cm=monthStr();
+  var cm=mesVer||monthStr();
   var altId=p.userId||'__none__';
   var sesiones=(STATE.sesionesClase||[]).filter(function(s){
     return s.mes===cm&&(s.instructorId===instrId||s.asistenteId===instrId
@@ -6711,13 +6805,22 @@ function showModalSesionesInstructor(instrId){
         +'<div>'+tramosHtml+'</div>'
         +'</div>';
     }).join('');
+  var _cmParts=cm.split('-').map(Number);
+  var _dAnt=new Date(_cmParts[0],_cmParts[1]-2,1), _dSig=new Date(_cmParts[0],_cmParts[1],1);
+  var mesAnteriorStr=_dAnt.getFullYear()+'-'+String(_dAnt.getMonth()+1).padStart(2,'0');
+  var mesSiguienteStr=_dSig.getFullYear()+'-'+String(_dSig.getMonth()+1).padStart(2,'0');
   mc.innerHTML='<div class="moverlay" style="z-index:9999">'
     +'<div class="modal" style="max-width:580px;max-height:90vh;overflow-y:auto">'
     +'<div class="modal-hdr" style="position:sticky;top:0;background:var(--surface);z-index:1">'
     +'<div class="modal-title">📅 Sesiones — '+p.nombre+'</div>'
     +'<button class="modal-close" onclick="closeModal()">✕</button></div>'
     +'<div class="modal-body" style="padding:16px">'
-    +'<div style="font-size:12px;color:var(--text3);margin-bottom:10px">'
+    +'<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:10px">'
+    +'<button class="btn-ghost btn-sm" onclick="showModalSesionesInstructor(\''+instrId+'\',\''+mesAnteriorStr+'\')">‹ Mes anterior</button>'
+    +'<div style="font-weight:700;min-width:120px;text-align:center">'+mesLabel(cm)+'</div>'
+    +'<button class="btn-ghost btn-sm" onclick="showModalSesionesInstructor(\''+instrId+'\',\''+mesSiguienteStr+'\')">Mes siguiente ›</button>'
+    +'</div>'
+    +'<div style="font-size:12px;color:var(--text3);margin-bottom:10px;text-align:center">'
     +'⏱ Total: <strong style="color:var(--green)">'+totalHoras.toFixed(2)+' h</strong>'
     +' · '+sesiones.length+' sesión'+(sesiones.length!==1?'es':'')+'</div>'
     +'<div style="font-size:10px;color:var(--text3);margin-bottom:12px">'
