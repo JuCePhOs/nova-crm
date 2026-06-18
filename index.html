@@ -1220,6 +1220,8 @@ function buildSidebar(){
     {id:'proyeccion',icon:'ti-chart-line',label:t('nav_proyeccion'),perm:null,hideFor:'instructor'},
     {id:'maestros',icon:'ti-chalkboard',label:t('nav_maestros'),perm:'ver_cursos',hideFor:'instructor'},
     {id:'horarios',icon:'ti-calendar-time',label:'Horarios',perm:null,showFn:function(){return currentUser&&currentUser.role==='instructor';}},
+    {id:'horarios_admin',icon:'ti-calendar-time',label:'Horarios de cursos',perm:'ver_cursos',showFn:function(){return currentUser&&currentUser.role!=='instructor';}},
+    {id:'asistencias_admin',icon:'ti-clipboard-list',label:'Asistencias',perm:'ver_cursos',showFn:function(){return currentUser&&currentUser.role!=='instructor';}},
     {id:'inactivos',icon:'ti-user-off',label:t('nav_inactivos'),perm:'ver_alumnos',badge:(STATE.alumnosInactivos||[]).length||null},
   {id:'clases',icon:'ti-calendar-event',label:'Mis Clases',perm:null,showFn:function(){return currentUser&&currentUser.role==='instructor';}},
   {id:'cursos_inst',icon:'ti-notebook',label:'Mis Cursos',perm:null,showFn:function(){return currentUser&&currentUser.role==='instructor';}},
@@ -1240,7 +1242,7 @@ function pendingPayments(){
   const pagados=new Set(STATE.pagosRegulares.filter(p=>p.meses&&p.meses.includes(cm)).map(p=>p.alumnoNombre));
   return STATE.matrículas.filter(m=>!pagados.has(m.alumno)).length||0;
 }
-const VIEWS={dashboard:renderDashboard,matriculas:renderMatriculas,pagos:renderPagos,alumnos:renderAlumnos,cursos:renderCursos,usuarios:renderUsuarios,proyeccion:renderProyeccion,inactivos:renderInactivos,dios:renderModoDios,maestros:renderMaestros,clases:renderClasesInstructor,cursos_inst:renderCursosInstructor,horarios:renderHorarios};
+const VIEWS={dashboard:renderDashboard,matriculas:renderMatriculas,pagos:renderPagos,alumnos:renderAlumnos,cursos:renderCursos,usuarios:renderUsuarios,proyeccion:renderProyeccion,inactivos:renderInactivos,dios:renderModoDios,maestros:renderMaestros,clases:renderClasesInstructor,cursos_inst:renderCursosInstructor,horarios:renderHorarios,horarios_admin:renderHorariosAdmin,asistencias_admin:renderAsistenciasAdmin};
 function navigate(tab){
   currentTab=tab;
   document.querySelectorAll('.sn-item').forEach(el=>el.classList.toggle('active',el.id===`sn-${tab}`));
@@ -4546,7 +4548,8 @@ async function ejecutarImport() {
         STATE.cursos[idx].costoBase=costosDefinidos[r.curso];
       }
     }
-    // Create matricula
+    // Create matricula — grupoId y salon se dejan null porque en la importación masiva
+    // no se conoce el grupo específico; el admin los asigna después en Matrículas.
     STATE.matrículas.push({
       folio:STATE.nextFolio++,
       alumno:r.alumno,
@@ -4558,7 +4561,8 @@ async function ejecutarImport() {
       primerPago:0,
       fecha:fmtFechaHoy,
       fechaISO:today,
-      grupoId,salon,
+      grupoId:null,
+      salon:null,
       notas:'Importado desde Excel',
       createdAt:new Date().toISOString(),
       createdBy:currentUser.username,
@@ -5943,8 +5947,9 @@ function autoFinalizarSesionesPasadas(){
       var tr=tramos[tramos.length-1];
       if(tr&&!tr.fin){
         tr.fin=limite.toISOString();
-        tr.horas=Math.max(0,(limite-new Date(tr.inicio))/3600000);
-        s[horasKey]=(s[horasKey]||0)+tr.horas;
+        tr.horas=+Math.max(0,(limite-new Date(tr.inicio))/3600000).toFixed(2);
+        var tramosAutoRol=s[trampKey]||[];
+        s[horasKey]=+tramosAutoRol.reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
       }
       s[campo]='finalizada';
       changed=true;
@@ -6134,8 +6139,15 @@ function renderListaAsistencia(t, asis){
     var est=estadoDe(m.folio);
     var btns=EST.map(function(e){
       var active=est===e[0];
-      return '<button class="btn-sm" style="border:1px solid '+e[3]+';background:'+(active?e[3]:'transparent')+';color:'+(active?'#fff':'var(--text2)')+';border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer" '
-        +'onclick="marcarAsistencia(\''+t.g.id+'\','+JSON.stringify(String(m.folio))+','+JSON.stringify(m.alumno||'')+',\''+e[0]+'\')">'
+      // Usamos data-attributes para evitar problemas de escape con nombres de alumnos
+      // que puedan contener comillas u otros caracteres especiales.
+      return '<button class="btn-asist btn-sm"'
+        +' data-gid="'+t.g.id+'"'
+        +' data-folio="'+m.folio+'"'
+        +' data-alumno="'+esc(m.alumno||'')+'"'
+        +' data-estado="'+e[0]+'"'
+        +' style="border:1px solid '+e[3]+';background:'+(active?e[3]:'transparent')+';color:'+(active?'#fff':'var(--text2)')+';border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer"'
+        +' onclick="marcarAsistenciaBtn(this)">'
         +'<i class="ti '+e[2]+'"></i> '+e[1]+'</button>';
     }).join('');
     return '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);flex-wrap:wrap">'
@@ -6210,9 +6222,10 @@ async function pausarClaseHorario(sesionId, rol){
   var tr=tramos[tramos.length-1];
   if(tr&&!tr.fin){
     tr.fin=new Date().toISOString(); // hora real del click
-    tr.horas=Math.max(0,(new Date(tr.fin)-new Date(tr.inicio))/3600000);
-    if(rol==='principal') s.horasInstructor=(s.horasInstructor||0)+tr.horas;
-    else s.horasAsistente=(s.horasAsistente||0)+tr.horas;
+    tr.horas=+Math.max(0,(new Date(tr.fin)-new Date(tr.inicio))/3600000).toFixed(2);
+    var tramosRol2=rol==='principal'?(s.tramosP||[]):(s.tramosA||[]);
+    if(rol==='principal') s.horasInstructor=+tramosRol2.reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
+    else s.horasAsistente=+tramosRol2.reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
   }
   if(rol==='principal') s.estadoP='pausada'; else s.estadoA='pausada';
   await saveState();
@@ -6246,9 +6259,10 @@ async function finalizarClaseHorario(sesionId, rol){
   var tr=tramos[tramos.length-1];
   if(tr&&!tr.fin){
     tr.fin=new Date().toISOString(); // hora real del click
-    tr.horas=Math.max(0,(new Date(tr.fin)-new Date(tr.inicio))/3600000);
-    if(rol==='principal') s.horasInstructor=(s.horasInstructor||0)+tr.horas;
-    else s.horasAsistente=(s.horasAsistente||0)+tr.horas;
+    tr.horas=+Math.max(0,(new Date(tr.fin)-new Date(tr.inicio))/3600000).toFixed(2);
+    var tramosRol2=rol==='principal'?(s.tramosP||[]):(s.tramosA||[]);
+    if(rol==='principal') s.horasInstructor=+tramosRol2.reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
+    else s.horasAsistente=+tramosRol2.reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
   }
   if(rol==='principal') s.estadoP='finalizada'; else s.estadoA='finalizada';
   await saveState();
@@ -6274,6 +6288,11 @@ async function reabrirClaseHorario(sesionId, rol){
   renderHorarios();
 }
 
+function marcarAsistenciaBtn(btn){
+  // Wrapper para leer data-attributes y evitar problemas de escape en onclick
+  marcarAsistencia(btn.dataset.gid, btn.dataset.folio, btn.dataset.alumno, btn.dataset.estado);
+}
+
 async function marcarAsistencia(grupoId, folio, alumno, estado){
   var hoy=todayISO();
   if(!STATE.asistencias)STATE.asistencias=[];
@@ -6289,6 +6308,134 @@ async function marcarAsistencia(grupoId, folio, alumno, estado){
   await saveState();
   renderHorarios();
 }
+
+
+// ════════════════════════════════════════════════
+//  HORARIOS DE CURSOS (admin/God)
+// ════════════════════════════════════════════════
+function renderHorariosAdmin(){
+  var mc=document.getElementById('main-content');
+  if(!mc) return;
+  var hoy=todayISO();
+  var diaHoy=diaHoyNombre();
+  var bloques=[];
+  (STATE.cursos||[]).forEach(function(c){
+    var grupos=(c.grupos&&c.grupos.length)?c.grupos:[{
+      id:'_main_'+c.id,nombre:c.nombre,salon:c.salon,dia:c.dia,
+      horarioDesde:c.horarioDesde,horarioHasta:c.horarioHasta,
+      instructorId:c.instructorId,asistenteId:c.asistenteId
+    }];
+    grupos.forEach(function(g){
+      var instrId=g.instructorId||c.instructorId, asistId=g.asistenteId||c.asistenteId;
+      var instr=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
+      var asist=(STATE.instructores||[]).find(function(x){return x.id===asistId;});
+      bloques.push({c:c,g:g,instr:instr,asist:asist,esHoy:g.dia===diaHoy});
+    });
+  });
+  bloques.sort(function(a,b){return (b.esHoy?1:0)-(a.esHoy?1:0)||(a.c.nombre+a.g.nombre).localeCompare(b.c.nombre+b.g.nombre);});
+  var rows=bloques.map(function(b){
+    var s=(STATE.sesionesClase||[]).find(function(x){return x.grupoId===b.g.id&&x.fecha===hoy;});
+    var asis=(STATE.asistencias||[]).find(function(x){return x.grupoId===b.g.id&&x.fecha===hoy;});
+    var estadoP=s?s.estadoP:null, estadoA=s?s.estadoA:null;
+    var col=estadoP==='finalizada'?'var(--green)':estadoP==='iniciada'?'#f59e0b':'var(--tx3)';
+    var tags=[];
+    if(b.g.salon)tags.push((b.g.salon==='Netflix'?'🔴 ':b.g.salon==='Online'?'💻 ':'▶️ ')+b.g.salon);
+    if(b.g.dia)tags.push('📅 '+b.g.dia);
+    if(b.g.horarioDesde&&b.g.horarioHasta)tags.push('⏰ '+b.g.horarioDesde+'-'+b.g.horarioHasta);
+    var alumnos=getAlumnosDeGrupo(b.c.nombre,b.g.id);
+    var asistRes='';
+    if(asis&&asis.registros&&asis.registros.length){
+      var nA=asis.registros.filter(function(r){return r.estado==='asistencia';}).length;
+      var nR=asis.registros.filter(function(r){return r.estado==='retardo';}).length;
+      var nF=asis.registros.filter(function(r){return r.estado==='falta';}).length;
+      asistRes='<div style="margin-top:6px;font-size:11px;color:var(--tx2)">Hoy: ✅ '+nA+' asist · ⏱ '+nR+' retardos · ❌ '+nF+' faltas de '+alumnos.length+' alumnos</div>';
+    }
+    return '<div style="background:var(--s2);border:1px solid var(--br);border-radius:10px;padding:12px 14px;margin-bottom:10px'+(b.esHoy?';border-left:3px solid var(--ac)':'')+'">'
+      +'<div style="display:flex;align-items:start;gap:10px;flex-wrap:wrap">'
+      +'<div style="flex:1;min-width:200px">'
+      +'<div style="font-weight:700;font-size:14px">'+esc(b.c.nombre+(b.g.nombre&&b.g.nombre!==b.c.nombre?' - '+b.g.nombre:''))+'</div>'
+      +'<div style="font-size:11px;color:var(--tx3);margin-top:2px">'+tags.join(' · ')+'</div>'
+      +(b.instr?'<div style="font-size:12px;margin-top:4px">Instructor: <strong>'+esc(b.instr.nombre)+'</strong> <span style="color:'+col+'">'+( estadoP||'sin iniciar')+'</span></div>':'')
+      +(b.asist?'<div style="font-size:12px">Asistente: <strong>'+esc(b.asist.nombre)+'</strong> <span style="color:'+(estadoA==='finalizada'?'var(--green)':estadoA==='iniciada'?'#f59e0b':'var(--tx3)')+'">'+( estadoA||'sin iniciar')+'</span></div>':'')
+      +asistRes+'</div>'
+      +'<div style="font-size:11px;text-align:right;color:var(--tx3)">'
+      +(b.esHoy?'<span style="background:var(--ac);color:#fff;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">HOY</span><br>':'')
+      +alumnos.length+' alumnos</div></div></div>';
+  }).join('');
+  mc.innerHTML='<div class="cnt fade-in">'
+    +'<div class="page-hdr"><div><div class="page-title">Horarios de Cursos</div>'
+    +'<div class="page-sub">Todos los instructores - hoy: '+fmtFecha(hoy)+'</div></div></div>'
+    +(bloques.length===0?'<div class="empty"><div class="empty-icon">📅</div><div class="empty-ttl">Sin cursos registrados</div></div>':rows)
+    +'</div>';
+}
+
+// ════════════════════════════════════════════════
+//  ASISTENCIAS ADMIN: historial completo y editable
+// ════════════════════════════════════════════════
+function renderAsistenciasAdmin(){
+  var mc=document.getElementById('main-content');
+  if(!mc) return;
+  var grupoIdx={};
+  (STATE.cursos||[]).forEach(function(c){
+    var grupos=(c.grupos&&c.grupos.length)?c.grupos:[{id:'_main_'+c.id,nombre:c.nombre}];
+    grupos.forEach(function(g){ grupoIdx[g.id]={c:c,g:g}; });
+  });
+  var asistencias=[...(STATE.asistencias||[])].sort(function(a,b){return b.fecha.localeCompare(a.fecha);});
+  var EST2=[['asistencia','Asistencia','var(--green)'],['retardo','Retardo','#f59e0b'],['falta','Falta','var(--danger)']];
+  var rows=asistencias.map(function(asis){
+    var info=grupoIdx[asis.grupoId];
+    var label=info?(asis.grupoId.startsWith('_main_')?info.c.nombre:info.c.nombre+' - '+info.g.nombre):'Grupo desconocido';
+    var alumnos=info?getAlumnosDeGrupo(info.c.nombre,info.g.id):[];
+    var registros=asis.registros||[];
+    var nA=registros.filter(function(r){return r.estado==='asistencia';}).length;
+    var nR=registros.filter(function(r){return r.estado==='retardo';}).length;
+    var nF=registros.filter(function(r){return r.estado==='falta';}).length;
+    var nSin=alumnos.length-registros.length;
+    var filas=alumnos.map(function(m){
+      var reg=registros.find(function(r){return String(r.folio)===String(m.folio);});
+      var est=reg?reg.estado:null;
+      var btns=EST2.map(function(e){
+        var active=est===e[0];
+        return '<button class="btn-sm" data-asid="'+asis.id+'" data-folio="'+m.folio+'" data-alumno="'+esc(m.alumno)+'" data-estado="'+e[0]+'" data-gid="'+asis.grupoId+'"'
+          +' style="border:1px solid '+e[2]+';background:'+(active?e[2]:'transparent')+';color:'+(active?'#fff':'var(--tx2)')+';border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer"'
+          +' onclick="editarAsistenciaAdmin(this)">'+e[1]+'</button>';
+      }).join('');
+      return '<div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--br);flex-wrap:wrap">'
+        +'<span style="flex:1;font-size:12px">'+esc(m.alumno)+'</span>'
+        +'<div style="display:flex;gap:4px">'+btns+'</div></div>';
+    }).join('');
+    return '<div style="background:var(--s2);border:1px solid var(--br);border-radius:10px;margin-bottom:12px;overflow:hidden">'
+      +'<div style="padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none" onclick="var d=this.nextElementSibling;d.style.display=d.style.display===\'none\'?\'block\':\'none\'">'
+      +'<div style="flex:1"><div style="font-weight:700;font-size:13px">'+esc(label)+'</div>'
+      +'<div style="font-size:11px;color:var(--tx3)">'+fmtFecha(asis.fecha)+' - Asist: '+nA+' / Retardos: '+nR+' / Faltas: '+nF+(nSin>0?' / Sin registro: '+nSin:'')+'</div></div>'
+      +'<span style="font-size:11px;color:var(--tx3)">expandir/editar</span></div>'
+      +'<div style="display:none">'+filas+'</div></div>';
+  }).join('');
+  mc.innerHTML='<div class="cnt fade-in">'
+    +'<div class="page-hdr"><div><div class="page-title">Registro de Asistencias</div>'
+    +'<div class="page-sub">Historial completo - editable por administradores y God</div></div></div>'
+    +(asistencias.length===0
+      ?'<div class="empty"><div class="empty-icon">📋</div><div class="empty-ttl">Sin asistencias registradas</div>'
+       +'<div class="empty-sub">Se registran durante las clases en la pestana Horarios.</div></div>'
+      :rows)
+    +'</div>';
+}
+
+async function editarAsistenciaAdmin(btn){
+  if(!STATE.asistencias) return;
+  var asis=STATE.asistencias.find(function(a){return a.id===btn.dataset.asid;});
+  if(!asis) return;
+  var idx=asis.registros.findIndex(function(r){return String(r.folio)===String(btn.dataset.folio);});
+  if(idx>=0){
+    if(asis.registros[idx].estado===btn.dataset.estado) asis.registros.splice(idx,1);
+    else asis.registros[idx].estado=btn.dataset.estado;
+  } else {
+    asis.registros.push({folio:btn.dataset.folio,alumno:btn.dataset.alumno,estado:btn.dataset.estado});
+  }
+  await saveState();
+  renderAsistenciasAdmin();
+}
+
 
 // ════════════════════════════════════════════════
 //  PESTAÑA MAESTROS / INSTRUCTORES
