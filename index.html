@@ -1017,7 +1017,7 @@ const USUARIOS_DEFAULT=[
 ];
 let STATE={matrículas:[],cursos:[],usuarios:[],pagosRegulares:[],promociones:[],alumnosInactivos:[],solicitudesStack:[],instructores:[],sesionesClase:[],pagosGastosMaestros:[],modulosCurso:{},semidiosActivo:false,nextFolio:1001,nextUID:100};
 let currentUser=null;
-function hasPerm(p){return currentUser?.perms?.includes(p);}
+function hasPerm(p){return !!(currentUser?.perms?.includes(p)||currentUser?.permisos?.includes(p));}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).substr(2,6);}
 function fmtMXN(n){return new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(n||0);}
 function fmtFecha(iso){if(!iso)return'—';const[y,m,d]=iso.split('-');const meses=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];return`${parseInt(d)} de ${meses[parseInt(m)-1]} de ${y}`;}
@@ -1188,6 +1188,8 @@ function doLogin(){
            || USUARIOS_DEFAULT.find(x=>x.username===u&&x.password===p);
   if(!user){document.getElementById('login-alert').innerHTML='<div class="alert-err">'+t('login_error')+'</div>';return;}
   currentUser=user;
+  // Normalizar: STATE.usuarios usa 'permisos', USUARIOS_DEFAULT usa 'perms'
+  if(!currentUser.perms&&currentUser.permisos) currentUser.perms=currentUser.permisos;
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='block';
   document.getElementById('sb-user').textContent=user.name;
@@ -1204,7 +1206,7 @@ function doLogin(){
   buildSidebar();
 
   initFirebase(); // SIEMPRE primero: si navigate() lanza, Firebase ya está en marcha
-  navigate(currentUser&&currentUser.role==='instructor'?'clases':'dashboard');
+  navigate(currentUser&&currentUser.role==='instructor'?'horarios':'dashboard');
 }
 function doLogout(){
   if(db)db.ref('nova_crm').off();
@@ -1219,20 +1221,20 @@ function buildSidebar(){
   const pending=pendingPayments();
   const items=[
     {id:'dashboard',icon:'ti-layout-dashboard',label:t('nav_dashboard'),perm:null,hideFor:'instructor'},
-    {id:'matriculas',icon:'ti-file-text',label:t('nav_matriculas'),perm:'ver_matriculas'},
-    {id:'pagos',icon:'ti-cash',label:t('nav_pagos'),perm:'ver_pagos',badge:pending||null},
-    {id:'alumnos',icon:'ti-school',label:t('nav_alumnos'),perm:'ver_alumnos'},
-    {id:'cursos',icon:'ti-books',label:t('nav_cursos'),perm:'ver_cursos'},
-    {id:'usuarios',icon:'ti-users',label:t('nav_usuarios'),perm:'ver_usuarios'},
+    {id:'matriculas',icon:'ti-file-text',label:t('nav_matriculas'),perm:'ver_matriculas',hideFor:'instructor'},
+    {id:'pagos',icon:'ti-cash',label:t('nav_pagos'),perm:'ver_pagos',badge:pending||null,hideFor:'instructor'},
+    {id:'alumnos',icon:'ti-school',label:t('nav_alumnos'),perm:'ver_alumnos',hideFor:'instructor'},
+    {id:'cursos',icon:'ti-books',label:t('nav_cursos'),perm:'ver_cursos',hideFor:'instructor'},
+    {id:'usuarios',icon:'ti-users',label:t('nav_usuarios'),perm:'ver_usuarios',hideFor:'instructor'},
     {id:'proyeccion',icon:'ti-chart-line',label:t('nav_proyeccion'),perm:null,hideFor:'instructor'},
     {id:'maestros',icon:'ti-chalkboard',label:t('nav_maestros'),perm:'ver_cursos',hideFor:'instructor'},
     {id:'horarios',icon:'ti-calendar-time',label:'Horarios',perm:null,showFn:function(){return currentUser&&currentUser.role==='instructor';}},
     {id:'horarios_admin',icon:'ti-calendar-time',label:'Horarios de cursos',perm:'ver_cursos',showFn:function(){return currentUser&&currentUser.role!=='instructor';}},
     {id:'asistencias_admin',icon:'ti-clipboard-list',label:'Asistencias',perm:'ver_cursos',showFn:function(){return currentUser&&currentUser.role!=='instructor';}},
-    {id:'inactivos',icon:'ti-user-off',label:t('nav_inactivos'),perm:'ver_alumnos',badge:(STATE.alumnosInactivos||[]).length||null},
+    {id:'inactivos',icon:'ti-user-off',label:t('nav_inactivos'),perm:'ver_alumnos',badge:(STATE.alumnosInactivos||[]).length||null,hideFor:'instructor'},
   {id:'clases',icon:'ti-calendar-event',label:'Mis Clases',perm:null,showFn:function(){return false;}},
   {id:'cursos_inst',icon:'ti-notebook',label:'Mis Cursos',perm:null,showFn:function(){return false;}},
-  {id:'dios',icon:'ti-tag',label:t('nav_dios'),perm:'ver_pagos',badge:((STATE.promociones||[]).filter(p=>p.estado==='pendiente').length+(STATE.solicitudesStack||[]).filter(s=>s.estado==='pendiente').length+(STATE.autorizacionesPago||[]).filter(a=>a.estado==='pendiente').length)||null},
+  {id:'dios',icon:'ti-tag',label:t('nav_dios'),perm:'modo_dios',showFn:function(){return hasPerm('modo_dios')&&currentUser&&currentUser.role!=='instructor';},badge:((STATE.promociones||[]).filter(p=>p.estado==='pendiente').length+(STATE.solicitudesStack||[]).filter(s=>s.estado==='pendiente').length+(STATE.autorizacionesPago||[]).filter(a=>a.estado==='pendiente').length)||null},
   ];
   const logoutBtn=document.getElementById('sb-logout-btn');
   if(logoutBtn)logoutBtn.innerHTML='<i class="ti ti-logout"></i> '+t('nav_salir');
@@ -6716,17 +6718,28 @@ function renderHorariosAdmin(){
 
   // Construir lista de todos los grupos con su instructor
   var todos=[];
-  var _yaGrupo=new Set();
+  // ── Filtro anti-anidamiento: identificar cursos que ya son grupos de otro ──
+  var _yaGrupoIds=new Set();     // IDs de cursos convertidos a grupos
+  var _yaGrupoNombres=new Set(); // Nombres de grupos (por si el ID no coincide)
   (STATE.cursos||[]).forEach(function(c){
-    (c.grupos||[]).forEach(function(g){
-      // Filtrar por _originalCursoId explícito
-      if(g._originalCursoId) _yaGrupo.add(g._originalCursoId);
-      // También filtrar si el id del grupo coincide con un id de curso
-      // (indica que ese curso fue convertido a grupo)
-      if(g.id && !g.id.startsWith('_main')) _yaGrupo.add(g.id);
+    if(!(c.grupos&&c.grupos.length)) return;
+    c.grupos.forEach(function(g){
+      // 1. Capturar por _originalCursoId (conversión explícita con agregarCursoComoGrupo)
+      if(g._originalCursoId) _yaGrupoIds.add(g._originalCursoId);
+      // 2. Capturar por g.id (si el grupo conservó el mismo id del curso original)
+      if(g.id&&!g.id.startsWith('_main')) _yaGrupoIds.add(g.id);
+      // 3. Capturar por nombre (grupos creados manualmente con el mismo nombre del curso)
+      if(g.nombre) _yaGrupoNombres.add(g.nombre.toLowerCase().trim());
     });
   });
-  (STATE.cursos||[]).filter(function(c){return!_yaGrupo.has(c.id);}).forEach(function(c){
+  (STATE.cursos||[]).filter(function(c){
+    // Excluir si el id ya está registrado como grupo de otro curso
+    if(_yaGrupoIds.has(c.id)) return false;
+    // Excluir si es un curso sin grupos propios y su nombre coincide con
+    // el nombre de algún grupo en otro curso (grupos creados manualmente)
+    if(!(c.grupos&&c.grupos.length)&&_yaGrupoNombres.has(c.nombre.toLowerCase().trim())) return false;
+    return true;
+  }).forEach(function(c){
     var grupos=(c.grupos&&c.grupos.length)?c.grupos:[{
       id:'_main_'+c.id,nombre:c.nombre,salon:c.salon,dia:c.dia,
       horarioDesde:c.horarioDesde,horarioHasta:c.horarioHasta,
