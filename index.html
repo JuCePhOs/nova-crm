@@ -1166,7 +1166,14 @@ async function loadState(){
 async function saveState(){
   try{localStorage.setItem('nova_crm_v4',JSON.stringify(STATE));}catch(e){}
   try{await window.storage.set('nova_crm_v4',JSON.stringify(STATE));}catch(e){}
-  if(db){try{await db.ref('nova_crm').set(STATE);}catch(e){setSyncStatus(false);}}
+  if(db){try{
+    const safeState=JSON.parse(JSON.stringify(STATE,function(_k,v){
+      if(typeof v==='number'&&!isFinite(v))return null;
+      return v===undefined?null:v;
+    }));
+    await db.ref('nova_crm').set(safeState);
+    setSyncStatus(true);
+  }catch(e){setSyncStatus(false,e.message);}}
 }
 
 // ════════════════════════════════════════════════
@@ -1743,7 +1750,7 @@ function renderDashboard(){
       <div class="stat-val" style="font-size:20px">${fmtMXN(ingresosPagosMes)}</div>
       <div class="stat-sub">${pagosMes.length} ${t('dash_transacciones')}</div><div style="font-size:10px;color:#6366f1;margin-top:4px;font-weight:600">→ Ver ingresos</div>
     </div>
-    <div class="stat-card" style="--stripe:var(--warn);cursor:pointer" onclick="navigate('pagos')" title="Ver promociones">
+    <div class="stat-card" style="--stripe:var(--warn);cursor:pointer" onclick="pagoSubTab='promos';navigate('pagos')" title="Ver promociones">
       <div class="stat-label">${t('dash_promos')}</div>
       <div class="stat-val">${promoActiva}</div>
       <div class="stat-sub">${STATE.cursos.length} ${t('dash_cursos_reg')}</div><div style="font-size:10px;color:var(--warn);margin-top:4px;font-weight:600">→ Ver promociones</div>
@@ -1833,6 +1840,9 @@ function renderMatriculas(){
     <button class="btn-primary btn-sm" onclick="showModalEditarMatriculasMasivo()">
       <i class="ti ti-edit"></i> Editar selección
     </button>
+    <button class="btn-warn btn-sm" onclick="bajasMasivasSeleccionadas()">
+      <i class="ti ti-user-off"></i> Dar de baja
+    </button>
     <button class="btn-danger btn-sm" onclick="eliminarMatriculasSeleccionadas()">
       <i class="ti ti-trash"></i> Eliminar seleccionadas
     </button>
@@ -1861,7 +1871,12 @@ function renderMatriculas(){
       </tbody>
     </table>
   </div>`}`;
-}
+
+  // Restaurar foco en la barra de búsqueda después de re-render
+  if(_mqF){
+    const nq=document.getElementById('mat-q');
+    if(nq){nq.focus();try{nq.setSelectionRange(_mqS[0],_mqS[1]);}catch(e){}}
+  }}
 
 
 // Highlight missing/invalid field
@@ -2192,7 +2207,15 @@ function showModalEditarMatricula(folio){
         <div class="form-group span2"><label class="flbl">Titular</label><input id="e-titular" value="${m.titular||''}"></div>
         <div class="form-group"><label class="flbl">Correo</label><input type="email" id="e-email" value="${m.email||''}"></div>
         <div class="form-group"><label class="flbl">Teléfono</label><input id="e-tel" value="${m.telefono||''}"></div>
-        <div class="form-group"><label class="flbl">Primer pago (MXN)</label><input type="number" id="e-pago" value="${m.primerPago||''}"></div>
+        <div class="form-group"><label class="flbl">Primer pago / Pago único (MXN)</label><input type="number" id="e-pago" value="${m.primerPago||''}"></div>
+        <div class="form-group"><label class="flbl">Tipo de pago</label>
+          <select id="e-pagotipo" onchange="var pm=document.getElementById('e-pagomensual-cont');if(pm)pm.style.display=this.value==='unico'?'none':'block'">
+            <option value="mensual"${(!m.pagoTipo||m.pagoTipo==='mensual')?' selected':''}>Mensual (genera pagos recurrentes)</option>
+            <option value="unico"${m.pagoTipo==='unico'?' selected':''}>Pago único (curso de una sola vez)</option>
+          </select></div>
+        <div class="form-group" id="e-pagomensual-cont" style="${(!m.pagoTipo||m.pagoTipo==='mensual')?'':'display:none'}">
+          <label class="flbl">Mensualidad siguiente (MXN) <span style="font-size:10px;color:var(--text3)">— si difiere del primer pago</span></label>
+          <input type="number" id="e-pagomensual" value="${m.pagoMensual!=null?m.pagoMensual:m.primerPago||''}"></div>
         ${currentUser.role==='admin'?`<div class="form-group"><label class="flbl">${t('mat_campo_fecha')}</label><input type="date" id="e-fecha" value="${m.fechaISO||todayISO()}"></div>`:'<div></div>'}
         ${puedeAutorizarPromos()?`<div class="form-group span2">
           <label class="flbl">Creado por <span style="font-size:10px;color:var(--text3)">(determina a quién se le suman las comisiones de esta matrícula)</span></label>
@@ -2206,6 +2229,29 @@ function showModalEditarMatricula(folio){
     </div>
   </div></div>`;
   actualizarGrupoEdicion(m.grupoId||null);
+}
+
+async function bajasMasivasSeleccionadas(){
+  var folios=[...document.querySelectorAll('.mat-chk:checked')].map(function(c){return parseInt(c.value);});
+  if(folios.length===0) return;
+  if(!confirm('¿Dar de baja a '+folios.length+' alumno(s) seleccionado(s)?\nSe moverán a Ex-alumnos. Esta acción no se puede deshacer.')) return;
+  var hoy=todayISO();
+  folios.forEach(function(folio){
+    var m=STATE.matrículas.find(function(x){return x.folio===folio;});
+    if(!m) return;
+    var inactivo={
+      id:uid(),alumno:m.alumno,email:m.email||'',telefono:m.telefono||'',
+      cursos:[m.curso].filter(Boolean),folio:m.folio,
+      motivo:'Baja masiva desde selección',notas:'',
+      fechaBaja:hoy,createdAt:new Date().toISOString()
+    };
+    if(!STATE.alumnosInactivos) STATE.alumnosInactivos=[];
+    STATE.alumnosInactivos.push(inactivo);
+  });
+  STATE.matrículas=STATE.matrículas.filter(function(m){return !folios.includes(m.folio);});
+  await saveState();
+  renderMatriculas();
+  alert('✅ '+folios.length+' alumno(s) movidos a Ex-alumnos.');
 }
 
 function showModalEditarMatriculasMasivo(){
@@ -2240,6 +2286,20 @@ function showModalEditarMatriculasMasivo(){
           <label class="flbl"><input type="checkbox" id="em-chk-creadopor" onchange="document.getElementById('em-creadopor').disabled=!this.checked;"> Creado por <span style="font-size:10px;color:var(--text3)">(determina a quién se le suman las comisiones)</span></label>
           <select id="em-creadopor" disabled>${(STATE.usuarios||[]).map(u=>`<option value="${u.username}"${u.username===primero.createdBy?' selected':''}>${u.name||u.username} (${u.username})</option>`).join('')}</select>
         </div>`:''}
+        <div class="form-group span2">
+          <label class="flbl"><input type="checkbox" id="em-chk-pagos" onchange="document.getElementById('em-pagos-cont').style.display=this.checked?'block':'none'"> Pagos (primer pago / mensualidad)</label>
+          <div id="em-pagos-cont" style="display:none;margin-top:8px">
+            <div class="form-grid">
+              <div class="form-group"><label class="flbl">Tipo de pago</label>
+                <select id="em-pagotipo">
+                  <option value="mensual">Mensual</option>
+                  <option value="unico">Pago único</option>
+                </select></div>
+              <div class="form-group"><label class="flbl">Primer pago (MXN)</label><input type="number" id="em-pago" value=""></div>
+              <div class="form-group span2"><label class="flbl">Mensualidad siguiente (MXN)</label><input type="number" id="em-pagomensual" value=""></div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="form-actions">
         <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -2279,6 +2339,30 @@ async function guardarEdicionMasiva(folios){
   var creadoPorEl=document.getElementById('em-chk-creadopor');
   if(creadoPorEl&&creadoPorEl.checked){
     cambios.createdBy=document.getElementById('em-creadopor').value;
+  }
+  var pagosChk=document.getElementById('em-chk-pagos');
+  if(pagosChk&&pagosChk.checked){
+    var ptEl=document.getElementById('em-pagotipo');
+    var ppEl=document.getElementById('em-pago');
+    var pmEl=document.getElementById('em-pagomensual');
+    var pt=ptEl?ptEl.value:'mensual';
+    if(ppEl&&ppEl.value) cambios.primerPago=parseFloat(ppEl.value)||0;
+    cambios.pagoTipo=pt;
+    cambios.pagoMensual=pt==='unico'?null:(pmEl&&pmEl.value?parseFloat(pmEl.value)||0:null);
+    // Crear/actualizar pagosRegulares para que Contabilidad lo vea
+    if(cambios.primerPago!=null){
+      var cm2=monthStr();
+      folios.forEach(function(folio){
+        var m2=STATE.matrículas.find(function(x){return x.folio===folio;});
+        if(!m2) return;
+        var exists=STATE.pagosRegulares.find(function(p){return p.crmFolio===folio&&(p.mes===cm2||(p.meses&&p.meses.includes(cm2)));});
+        if(!exists){
+          STATE.pagosRegulares.push({id:uid(),alumnoNombre:m2.alumno,crmFolio:folio,curso:m2.curso||'',
+            monto:cambios.primerPago,mes:cm2,meses:[cm2],fecha:todayISO(),
+            createdAt:new Date().toISOString()});
+        }
+      });
+    }
   }
   if(Object.keys(cambios).length===0){ alert('No marcaste ningún campo para aplicar. Selecciona al menos uno.'); return; }
   if(!confirm('¿Aplicar estos cambios a las '+folios.length+' matrículas seleccionadas (folios #'+folios.join(', #')+')?\\n\\nCampos a cambiar: '+Object.keys(cambios).join(', ')))return;
@@ -2355,6 +2439,8 @@ async function guardarEdicion(folio){
     email:document.getElementById('e-email').value.trim(),
     telefono:document.getElementById('e-tel').value.trim(),
     primerPago:nuevoPago,
+    pagoTipo:(document.getElementById('e-pagotipo')&&document.getElementById('e-pagotipo').value)||'mensual',
+    pagoMensual:(function(){var pt=document.getElementById('e-pagotipo');var pm=document.getElementById('e-pagomensual');if(pt&&pt.value==='unico')return null;return pm?parseFloat(pm.value)||nuevoPago:nuevoPago;})(),
     fechaISO,fecha:fmtFecha(fechaISO),
     autorizacionPendiente:necesitaAutorizacion||false,
   };
@@ -3764,7 +3850,7 @@ async function guardarCursoModal(nombreOriginal) {
       const idx = STATE.cursos.findIndex(x=>x.nombre===nombreOriginal);
       if(idx>=0){
         const nuevoNombre = nombre;
-        STATE.cursos[idx]={...STATE.cursos[idx],nombre:nuevoNombre,costoBase:parseFloat(costo),pagoMinimo,cupo:parseInt(document.getElementById('mc-cupo')?.value)||0,
+        STATE.cursos[idx]={...STATE.cursos[idx],nombre:nuevoNombre,costoBase:parseFloat(costo)||0,pagoMinimo,cupo:parseInt(document.getElementById('mc-cupo')?.value)||0,
           tipo,fechaInicio:inicio,fechaFin:fin,dia,horarioDesde,horarioHasta,salon,instructorId,instructor:instObj?instObj.nombre:'',asistenteId,asistente:asistObj?asistObj.nombre:'',grupos:_modalGrupos.map(g=>({...g}))};
         // Update references in matrículas
         if(nuevoNombre!==nombreOriginal){
@@ -3775,7 +3861,7 @@ async function guardarCursoModal(nombreOriginal) {
     } else {
       // NEW
       if(STATE.cursos.find(c=>c.nombre===nombre)){alert(t('cur_existe'));return;}
-      STATE.cursos.push({id:uid(),nombre,costoBase:parseFloat(costo),pagoMinimo,tipo,
+      STATE.cursos.push({id:uid(),nombre,costoBase:parseFloat(costo)||0,pagoMinimo,tipo,
         fechaInicio:inicio,fechaFin:fin,dia,horarioDesde,horarioHasta,salon,
         instructorId,instructor:instObj?instObj.nombre:'',
         asistenteId,asistente:asistObj?asistObj.nombre:'',
@@ -3808,6 +3894,28 @@ async function guardarCursoModal(nombreOriginal) {
     if(convertedIds.length>0){
       STATE.cursos=STATE.cursos.filter(c=>!convertedIds.includes(c.id));
     }
+  // Auto-aplicar promociones vigentes del curso a los grupos nuevos
+  var cursoCorrecto=STATE.cursos.find(function(c){return c.nombre===nombre;});
+  if(cursoCorrecto&&cursoCorrecto.grupos&&cursoCorrecto.grupos.length){
+    (STATE.promociones||[]).forEach(function(promo){
+      if(!promo.activa) return;
+      var ca=promo.cursosAplicables||'todos';
+      // ¿La promo ya aplica a este curso (sin grupo específico)?
+      var aplicaAlCurso = ca==='todos' || ca.split(',').some(function(e){
+        var p=e.trim().split('|'); return p[0]===nombre && !p[1];
+      });
+      if(!aplicaAlCurso) return;
+      // Agregar los grupos del curso a cursosAplicables si no están ya
+      cursoCorrecto.grupos.forEach(function(g){
+        var entradaGrupo = nombre+'|'+g.id;
+        var yaIncluido = ca==='todos' || ca.split(',').some(function(e){return e.trim()===entradaGrupo;});
+        if(!yaIncluido && ca!=='todos'){
+          promo.cursosAplicables = ca+','+entradaGrupo;
+          ca = promo.cursosAplicables;
+        }
+      });
+    });
+  }
   await saveState(); alert('✅ Curso guardado correctamente');
     closeModal();
     renderCursos();
@@ -4477,7 +4585,7 @@ function actualizarPreview() {
             <div style="font-size:10px;color:var(--text3);margin-bottom:8px">${isNew?'🆕 Curso nuevo':costoExistente>0?`✓ Costo actual: $${costoExistente}/mes`:'⚠️ Sin costo definido'}</div>
             <div style="display:flex;align-items:center;gap:6px">
               <span style="font-size:12px;color:var(--text2)">$</span>
-              <input type="number" id="costo-curso-${CSS.escape(curso)}" min="0" step="0.01"
+              <input type="number" id="costo-curso-${CSS.escape(curso)}" data-curso="${curso}" min="0" step="0.01"
                 placeholder="0.00" value="${costoExistente||''}"
                 style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:'DM Mono',monospace"
                 oninput="this.closest('div[style]').style.borderColor=this.value>0?'var(--green-border)':'var(--warn-border)'">
@@ -4522,7 +4630,7 @@ async function ejecutarImport() {
     const val=parseFloat(input.value)||0;
     if(val>0){
       // Extract course name from element id
-      const curso=input.closest('div[style]').querySelector('div[style*="font-weight:600"]')?.textContent?.trim();
+      const curso=input.dataset.curso;
       if(curso) costosDefinidos[curso]=val;
     }
   });
@@ -4534,8 +4642,8 @@ async function ejecutarImport() {
     // Create course if not exists
     if(r.curso&&!STATE.cursos.find(c=>c.nombre===r.curso)){
       STATE.cursos.push({
-        nombre:r.curso,nivel:'',cupo:'',
-        costoBase:costosDefinidos[r.curso]||'',
+        id:uid(),nombre:r.curso,nivel:'',cupo:'',
+        costoBase:costosDefinidos[r.curso]||0,
         horario:'',instructor:'',salon:null,
         fechaInicio:today,fechaFin:null,
         createdAt:new Date().toISOString()
