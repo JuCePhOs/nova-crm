@@ -1823,6 +1823,9 @@ function renderMatriculas(){
   if(!hasPerm('ver_matriculas')){document.getElementById('main-content').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><h3>'+t('sin_acceso')+'</h3><p>'+t('sin_acceso_desc')+'</p></div>'; return;}
   const q=(document.getElementById('mat-q')||{value:''}).value?.toLowerCase()||'';
   const list=STATE.matrículas.filter(m=>!q||m.alumno?.toLowerCase().includes(q)||m.titular?.toLowerCase().includes(q)||m.curso?.toLowerCase().includes(q)||String(m.folio).includes(q));
+  const _mq=document.getElementById('mat-q');
+  const _mqF=document.activeElement===_mq;
+  const _mqS=_mq?[_mq.selectionStart,_mq.selectionEnd]:[0,0];
   document.getElementById('main-content').innerHTML=`
   <div class="page-header fade-in">
     <h2>Matrículas</h2>
