@@ -1750,7 +1750,7 @@ function renderDashboard(){
       <div class="stat-val" style="font-size:20px">${fmtMXN(ingresosPagosMes)}</div>
       <div class="stat-sub">${pagosMes.length} ${t('dash_transacciones')}</div><div style="font-size:10px;color:#6366f1;margin-top:4px;font-weight:600">→ Ver ingresos</div>
     </div>
-    <div class="stat-card" style="--stripe:var(--warn);cursor:pointer" onclick="pagoSubTab='promos';navigate('pagos')" title="Ver promociones">
+    <div class="stat-card" style="--stripe:var(--warn);cursor:pointer" onclick="navigate('dios');setTimeout(function(){var el=document.getElementById('sec-promos');if(el)el.scrollIntoView({behavior:'smooth'});},200)" title="Ver promociones">
       <div class="stat-label">${t('dash_promos')}</div>
       <div class="stat-val">${promoActiva}</div>
       <div class="stat-sub">${STATE.cursos.length} ${t('dash_cursos_reg')}</div><div style="font-size:10px;color:var(--warn);margin-top:4px;font-weight:600">→ Ver promociones</div>
@@ -5052,7 +5052,7 @@ function renderModoDios(){
   // ── NUEVA PROMOCIÓN (Dios y Administradores) ─────────────────────────────
   if(hasPerm('gestionar_promociones')||esDios){
     html += `
-    <div style="font-size:13px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">+ Nueva Promoción</div>
+    <div id="sec-promos" style="font-size:13px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">+ Nueva Promoción</div>
     <div class="card fade-in" style="max-width:640px;margin-bottom:24px">
       <div class="form-grid">
         <div class="form-group span2"><label class="flbl">${t('promo_campo_nombre')}</label><input id="np-nombre" placeholder="Ej: Pago adelantado 3 meses"></div>
@@ -6419,14 +6419,18 @@ async function marcarAsistencia(grupoId, folio, alumno, estado){
 
 
 // ════════════════════════════════════════════════
-//  HORARIOS DE CURSOS (admin/God)
+//  HORARIOS DE CURSOS (admin/God) — vista COMPLETA y EDITABLE
 // ════════════════════════════════════════════════
 function renderHorariosAdmin(){
+  // Admin ve TODOS los instructores, con los mismos controles que ellos tienen
+  autoFinalizarSesionesPasadas();
   var mc=document.getElementById('main-content');
   if(!mc) return;
   var hoy=todayISO();
   var diaHoy=diaHoyNombre();
-  var bloques=[];
+
+  // Construir lista de todos los grupos con su instructor
+  var todos=[];
   (STATE.cursos||[]).forEach(function(c){
     var grupos=(c.grupos&&c.grupos.length)?c.grupos:[{
       id:'_main_'+c.id,nombre:c.nombre,salon:c.salon,dia:c.dia,
@@ -6434,48 +6438,108 @@ function renderHorariosAdmin(){
       instructorId:c.instructorId,asistenteId:c.asistenteId
     }];
     grupos.forEach(function(g){
-      var instrId=g.instructorId||c.instructorId, asistId=g.asistenteId||c.asistenteId;
-      var instr=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
-      var asist=(STATE.instructores||[]).find(function(x){return x.id===asistId;});
-      bloques.push({c:c,g:g,instr:instr,asist:asist,esHoy:g.dia===diaHoy});
+      var esHoy=diasOverlap(diaHoy,g.dia||c.dia||'');
+      todos.push({c:c,g:g,esP:true,esA:false,esHoy:esHoy,_adminView:true});
+      // Si tiene asistente, agregar también su tarjeta
+      if(g.asistenteId||c.asistenteId){
+        todos.push({c:c,g:g,esP:false,esA:true,esHoy:esHoy,_adminView:true});
+      }
     });
   });
-  bloques.sort(function(a,b){return (b.esHoy?1:0)-(a.esHoy?1:0)||(a.c.nombre+a.g.nombre).localeCompare(b.c.nombre+b.g.nombre);});
-  var rows=bloques.map(function(b){
-    var s=(STATE.sesionesClase||[]).find(function(x){return x.grupoId===b.g.id&&x.fecha===hoy;});
-    var asis=(STATE.asistencias||[]).find(function(x){return x.grupoId===b.g.id&&x.fecha===hoy;});
-    var estadoP=s?s.estadoP:null, estadoA=s?s.estadoA:null;
-    var col=estadoP==='finalizada'?'var(--green)':estadoP==='iniciada'?'#f59e0b':'var(--tx3)';
-    var tags=[];
-    if(b.g.salon)tags.push((b.g.salon==='Netflix'?'🔴 ':b.g.salon==='Online'?'💻 ':'▶️ ')+b.g.salon);
-    if(b.g.dia)tags.push('📅 '+b.g.dia);
-    if(b.g.horarioDesde&&b.g.horarioHasta)tags.push('⏰ '+b.g.horarioDesde+'-'+b.g.horarioHasta);
-    var alumnos=getAlumnosDeGrupo(b.c.nombre,b.g.id);
-    var asistRes='';
-    if(asis&&asis.registros&&asis.registros.length){
-      var nA=asis.registros.filter(function(r){return r.estado==='asistencia';}).length;
-      var nR=asis.registros.filter(function(r){return r.estado==='retardo';}).length;
-      var nF=asis.registros.filter(function(r){return r.estado==='falta';}).length;
-      asistRes='<div style="margin-top:6px;font-size:11px;color:var(--tx2)">Hoy: ✅ '+nA+' asist · ⏱ '+nR+' retardos · ❌ '+nF+' faltas de '+alumnos.length+' alumnos</div>';
-    }
-    return '<div style="background:var(--s2);border:1px solid var(--br);border-radius:10px;padding:12px 14px;margin-bottom:10px'+(b.esHoy?';border-left:3px solid var(--ac)':'')+'">'
-      +'<div style="display:flex;align-items:start;gap:10px;flex-wrap:wrap">'
-      +'<div style="flex:1;min-width:200px">'
-      +'<div style="font-weight:700;font-size:14px">'+esc(b.c.nombre+(b.g.nombre&&b.g.nombre!==b.c.nombre?' - '+b.g.nombre:''))+'</div>'
-      +'<div style="font-size:11px;color:var(--tx3);margin-top:2px">'+tags.join(' · ')+'</div>'
-      +(b.instr?'<div style="font-size:12px;margin-top:4px">Instructor: <strong>'+esc(b.instr.nombre)+'</strong> <span style="color:'+col+'">'+( estadoP||'sin iniciar')+'</span></div>':'')
-      +(b.asist?'<div style="font-size:12px">Asistente: <strong>'+esc(b.asist.nombre)+'</strong> <span style="color:'+(estadoA==='finalizada'?'var(--green)':estadoA==='iniciada'?'#f59e0b':'var(--tx3)')+'">'+( estadoA||'sin iniciar')+'</span></div>':'')
-      +asistRes+'</div>'
-      +'<div style="font-size:11px;text-align:right;color:var(--tx3)">'
-      +(b.esHoy?'<span style="background:var(--ac);color:#fff;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700">HOY</span><br>':'')
-      +alumnos.length+' alumnos</div></div></div>';
-  }).join('');
-  mc.innerHTML='<div class="cnt fade-in">'
-    +'<div class="page-hdr"><div><div class="page-title">Horarios de Cursos</div>'
-    +'<div class="page-sub">Todos los instructores - hoy: '+fmtFecha(hoy)+'</div></div></div>'
-    +(bloques.length===0?'<div class="empty"><div class="empty-icon">📅</div><div class="empty-ttl">Sin cursos registrados</div></div>':rows)
+
+  // Separar: hoy primero
+  var deHoy=todos.filter(function(t){return t.esHoy&&t.esP;}); // principal por grupo, hoy
+  var deMas=todos.filter(function(t){return !t.esHoy&&t.esP;}); // resto de la semana
+
+  var header='<div class="page-header fade-in">'
+    +'<h2>📅 Horarios de Cursos — Todos los instructores</h2>'
+    +'<p>Hoy: '+diaHoy+', '+new Date().toLocaleDateString("es-MX",{day:"numeric",month:"long",year:"numeric"})
+    +' &nbsp;·&nbsp; '+deHoy.length+' grupo(s) con clase hoy</p></div>';
+
+  var html=header;
+
+  if(deHoy.length===0){
+    html+='<div class="empty"><div class="empty-icon">📅</div>'
+      +'<h3>No hay grupos programados para hoy ('+diaHoy+')</h3></div>';
+  } else {
+    html+='<div style="font-size:11px;font-weight:700;color:var(--text2);text-transform:uppercase;'
+      +'letter-spacing:.5px;margin-bottom:12px">📍 Clases de hoy</div>';
+    html+=deHoy.map(function(t){return renderTarjetaHorarioAdmin(t);}).join('');
+  }
+
+  if(deMas.length>0){
+    html+='<div style="margin-top:28px;margin-bottom:10px;font-size:11px;font-weight:700;'
+      +'color:var(--text3);text-transform:uppercase;letter-spacing:.5px">'
+      +'📋 Resto del horario semanal ('+deMas.length+' grupos)</div>';
+    html+=deMas.map(function(t){return renderTarjetaResumenAdmin(t);}).join('');
+  }
+
+  mc.innerHTML=html;
+}
+
+function renderTarjetaResumenAdmin(t){
+  var c=t.c,g=t.g;
+  var instrId=g.instructorId||c.instructorId, asistId=g.asistenteId||c.asistenteId;
+  var instr=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
+  var asist=(STATE.instructores||[]).find(function(x){return x.id===asistId;});
+  var info=[];
+  if(g.dia||c.dia) info.push('📅 '+(g.dia||c.dia));
+  if(g.horarioDesde&&g.horarioHasta) info.push('⏰ '+g.horarioDesde+'–'+g.horarioHasta);
+  if(g.salon||c.salon){var s=g.salon||c.salon;info.push((s==='Netflix'?'🔴':s==='Online'?'💻':'▶️')+' '+esc(s));}
+  return '<div class="fade-in" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;'
+    +'padding:10px 14px;margin-bottom:8px;opacity:.85;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'
+    +'<div><strong style="font-size:13px">'+esc(cursoGrupoLabel(c.nombre,g.nombre))+'</strong>'
+    +(info.length?' <span style="font-size:12px;color:var(--text3)">· '+info.join(' · ')+'</span>':'')+'</div>'
+    +'<div style="font-size:11px;color:var(--text3)">'
+    +(instr?'👨‍🏫 '+esc(instr.nombre):'Sin instructor asignado')
+    +(asist?'  🤝 '+esc(asist.nombre):'')+'</div>'
     +'</div>';
 }
+
+function renderTarjetaHorarioAdmin(t){
+  var c=t.c,g=t.g,hoy=todayISO();
+  var instrId=g.instructorId||c.instructorId, asistId=g.asistenteId||c.asistenteId;
+  var instr=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
+  var asist=(STATE.instructores||[]).find(function(x){return x.id===asistId;});
+  var s=(STATE.sesionesClase||[]).find(function(x){return x.grupoId===g.id&&x.fecha===hoy;});
+  var asis=(STATE.asistencias||[]).find(function(x){return x.grupoId===g.id&&x.fecha===hoy;});
+  var anyIniciada=!!(s&&(s.estadoP==='iniciada'||s.estadoA==='iniciada'));
+  var anyExiste=!!(s&&(s.estadoP||s.estadoA));
+  var info=[];
+  if(g.salon||c.salon){var sl=g.salon||c.salon;info.push((sl==='Netflix'?'🔴':sl==='Online'?'💻':'▶️')+' '+esc(sl));}
+  if(g.horarioDesde&&g.horarioHasta) info.push('⏰ '+g.horarioDesde+'–'+g.horarioHasta);
+
+  var html='<div class="fade-in" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px">';
+  html+='<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">';
+  html+='<div><div style="font-size:16px;font-weight:700">'+esc(cursoGrupoLabel(c.nombre,g.nombre))+'</div>';
+  if(info.length) html+='<div style="font-size:12px;color:var(--text3);margin-top:3px">'+info.join(' · ')+'</div></div>';
+  html+='<div style="font-size:12px;color:var(--text2);text-align:right">'
+    +(instr?'👨‍🏫 <strong>'+esc(instr.nombre)+'</strong> '+(s&&s.estadoP?'<span style="color:'+(s.estadoP==='finalizada'?'var(--green)':'#f59e0b')+'">'+s.estadoP+'</span>':''):'')
+    +(asist?'<br>🤝 <strong>'+esc(asist.nombre)+'</strong> '+(s&&s.estadoA?'<span style="color:'+(s.estadoA==='finalizada'?'var(--green)':'#f59e0b')+'">'+s.estadoA+'</span>':''):'')
+    +'</div></div>';
+
+  // Controles de clase — admin puede iniciar/pausar/finalizar en nombre del instructor
+  if(instrId){
+    var tSimP={c:c,g:g,esP:true,esA:false};
+    html+=renderRolControls(tSimP,'principal',s,'');
+  }
+  if(asistId){
+    var tSimA={c:c,g:g,esP:false,esA:true};
+    html+=renderRolControls(tSimA,'asistente',s,'');
+  }
+
+  // Lista de asistencia editable
+  if(anyIniciada){
+    html+=renderListaAsistencia({c:c,g:g,esP:true,esA:false},asis);
+  } else if(anyExiste){
+    html+='<div style="font-size:12px;color:var(--text3);margin-top:10px">La clase ya terminó. '
+      +'<button class="btn-ghost btn-sm" onclick="navigate(\'asistencias_admin\')" style="font-size:11px">Ver asistencias históricas</button></div>';
+  }
+
+  html+='</div>';
+  return html;
+}
+
 
 // ════════════════════════════════════════════════
 //  ASISTENCIAS ADMIN: historial completo y editable
