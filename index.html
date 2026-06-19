@@ -3592,6 +3592,39 @@ function renderAlumnos(){
   _renderAlumnosCards();
 }
 
+
+// ════════════════════════════════════════════════
+//  CURSOS — MODALES REDISEÑADOS
+// ════════════════════════════════════════════════
+
+// Stores grupos being edited in the modal
+let _modalGrupos = [];
+
+let _curQ='';
+
+function _filtrarCursos(){
+  var q=(_curQ||'').toLowerCase();
+  var tabla=document.querySelector('#main-content .table-wrap table tbody');
+  if(!tabla) return;
+  tabla.querySelectorAll('tr').forEach(function(tr){
+    // Solo filas principales (no las de detalle expandible)
+    if(tr.classList.contains('cur-detail')) return;
+    var texto=tr.textContent.toLowerCase();
+    tr.style.display=(!q||texto.includes(q))?'':'none';
+    // También ocultar la fila de detalle asociada si existe
+    var next=tr.nextElementSibling;
+    if(next&&next.classList.contains('cur-detail')){
+      next.style.display=(!q||texto.includes(q))?'':'none';
+    }
+  });
+  // Actualizar contador
+  var ph=document.querySelector('#main-content .page-header p');
+  if(ph){
+    var visible=tabla.querySelectorAll('tr:not([style*="display: none"]):not(.cur-detail)').length;
+    ph.textContent=visible+' curso'+(visible!==1?'s':'')+' encontrado'+(visible!==1?'s':'')+(q?' para "'+q+'"':'');
+  }
+}
+
 function renderCursos(){
   if(!hasPerm('ver_cursos')){
     document.getElementById('main-content').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><h3>Sin acceso</h3></div>';
@@ -3777,6 +3810,7 @@ function renderCursos(){
   document.getElementById('main-content').innerHTML=
     '<div class="page-header fade-in"><h2>Cursos</h2><p>'+cursos.length+' '+t('cur_registrados')+'</p></div>'
     +'<div class="toolbar">'
+    +'<input id="cur-q" type="text" placeholder="🔍 Buscar por nombre, salón, tipo…" style="flex:1;max-width:360px" value="" oninput="_curQ=this.value;_filtrarCursos()">'
     +(canEdit?'<button class="btn-primary" onclick="showModalNuevoCurso()"><i class="ti ti-plus"></i> '+t('cur_nuevo')+'</button>':'')
     +(canRecover?'<button class="btn-warn btn-sm" onclick="recuperarCursos()" title="Solo Modo Dios"><i class="ti ti-restore"></i> Recuperar cursos borrados</button>':'')
     +'</div>'
@@ -3796,15 +3830,8 @@ function renderCursos(){
         +'<tbody>'+rows+'</tbody>'
         +'</table></div>'
     );
+  _filtrarCursos();
 }
-
-// ════════════════════════════════════════════════
-//  CURSOS — MODALES REDISEÑADOS
-// ════════════════════════════════════════════════
-
-// Stores grupos being edited in the modal
-let _modalGrupos = [];
-
 function showModalNuevoCurso() {
   _modalGrupos = [];
   renderCursoModal(null);
@@ -4112,12 +4139,68 @@ function addModalGrupo() {
   if(cont) cont.innerHTML = _modalGrupos.map((g,i)=>renderGrupoRow(g,i)).join('');
 }
 
-function removeModalGrupo(idx) {
+async function removeModalGrupo(idx) {
+  const g = _modalGrupos[idx];
+  if(!g) return;
+
+  if(g._fromCurso || g._originalCursoId) {
+    // ── Grupo creado DESDE UN CURSO EXISTENTE → restaurar como curso independiente
+    const ok = confirm(
+      '⚠️ "' + g.nombre + '" fue agregado desde un curso existente.\n\n' +
+      'Al quitarlo del grupo, se restaurará como curso independiente ' +
+      'para que puedas editarlo o borrarlo desde la pestaña Cursos.\n\n' +
+      '¿Continuar?'
+    );
+    if(!ok) return;
+
+    // Restaurar el curso solo si no existe ya un curso con ese ID
+    const existePorId = STATE.cursos.find(c => c.id === (g._originalCursoId || g.id));
+    const existePorNombre = STATE.cursos.find(c => c.nombre === g.nombre && c.grupos && c.grupos.length === 0);
+
+    if(!existePorId) {
+      // Reconstruir el curso desde los datos del grupo
+      const cursoRestaurado = {
+        id:    g._originalCursoId || g.id || uid(),
+        nombre:        g.nombre        || '',
+        nivel:         g.nivel         || '',
+        cupo:          g.cupo          || '',
+        costoBase:     g.costoBase     || 0,
+        salon:         g.salon         || null,
+        dia:           g.dia           || '',
+        horarioDesde:  g.horarioDesde  || '',
+        horarioHasta:  g.horarioHasta  || '',
+        instructorId:  g.instructorId  || '',
+        asistenteId:   g.asistenteId   || '',
+        fechaInicio:   g.fechaInicio   || '',
+        fechaFin:      g.fechaFin      || null,
+        grupos:        [],
+        createdAt:     new Date().toISOString(),
+        restoradoDeGrupo: true,
+      };
+      STATE.cursos.push(cursoRestaurado);
+      await saveState();
+      alert('✅ "' + g.nombre + '" restaurado como curso independiente.\nPuedes encontrarlo en la pestaña Cursos.');
+    } else {
+      alert('ℹ️ El curso "' + g.nombre + '" ya existe como curso independiente.\nPuedes encontrarlo en la pestaña Cursos.');
+    }
+
+  } else {
+    // ── Grupo creado MANUALMENTE (nuevo grupo) → eliminar definitivamente
+    const ok = confirm(
+      '🗑️ ¿Eliminar el grupo "' + g.nombre + '" definitivamente?\n\n' +
+      'Este grupo fue creado como grupo nuevo dentro de este curso. ' +
+      'Al eliminarlo se perderá toda su configuración.\n\n' +
+      'Esta acción NO se puede deshacer.'
+    );
+    if(!ok) return;
+  }
+
+  // Quitar del array y actualizar display
   _modalGrupos.splice(idx, 1);
   const cont = document.getElementById('grupos-container');
   if(cont) cont.innerHTML = _modalGrupos.length===0
-    ? `<div style="background:var(--surface2);border:1px dashed var(--border);border-radius:8px;padding:14px;text-align:center;color:var(--text3);font-size:13px">Sin grupos adicionales — este curso se tomará como un grupo único.</div>`
-    : _modalGrupos.map((g,i)=>renderGrupoRow(g,i)).join('');
+    ? '<div style="background:var(--surface2);border:1px dashed var(--border);border-radius:8px;padding:14px;text-align:center;color:var(--text3);font-size:13px">Sin grupos adicionales — este curso se tomará como un grupo único.</div>'
+    : _modalGrupos.map((g2,i2)=>renderGrupoRow(g2,i2)).join('');
 }
 
 async function guardarCursoModal(nombreOriginal) {
