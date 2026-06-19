@@ -1230,8 +1230,8 @@ function buildSidebar(){
     {id:'horarios_admin',icon:'ti-calendar-time',label:'Horarios de cursos',perm:'ver_cursos',showFn:function(){return currentUser&&currentUser.role!=='instructor';}},
     {id:'asistencias_admin',icon:'ti-clipboard-list',label:'Asistencias',perm:'ver_cursos',showFn:function(){return currentUser&&currentUser.role!=='instructor';}},
     {id:'inactivos',icon:'ti-user-off',label:t('nav_inactivos'),perm:'ver_alumnos',badge:(STATE.alumnosInactivos||[]).length||null},
-  {id:'clases',icon:'ti-calendar-event',label:'Mis Clases',perm:null,showFn:function(){return currentUser&&currentUser.role==='instructor';}},
-  {id:'cursos_inst',icon:'ti-notebook',label:'Mis Cursos',perm:null,showFn:function(){return currentUser&&currentUser.role==='instructor';}},
+  {id:'clases',icon:'ti-calendar-event',label:'Mis Clases',perm:null,showFn:function(){return false;}},
+  {id:'cursos_inst',icon:'ti-notebook',label:'Mis Cursos',perm:null,showFn:function(){return false;}},
   {id:'dios',icon:'ti-tag',label:t('nav_dios'),perm:'ver_pagos',badge:((STATE.promociones||[]).filter(p=>p.estado==='pendiente').length+(STATE.solicitudesStack||[]).filter(s=>s.estado==='pendiente').length+(STATE.autorizacionesPago||[]).filter(a=>a.estado==='pendiente').length)||null},
   ];
   const logoutBtn=document.getElementById('sb-logout-btn');
@@ -1383,6 +1383,81 @@ function debugInstructorInfo(maestro){
       +'</pre></details>';
   }catch(e){return '<div style="font-size:11px;color:var(--text3);margin-top:10px">(debug error: '+String(e&&e.message)+')</div>';}
 }
+
+function renderHorariosSubCursos(){
+  var mc=document.getElementById('main-content');
+  if(!mc) return;
+  if(!currentUser) return;
+  var uid=currentUser.id;
+  var maestro=(STATE.instructores||[]).find(function(i){
+    return i.userId===currentUser.id||i.nombre===currentUser.name||i.nombre===currentUser.username;
+  });
+  // Cursos asignados al instructor (nivel curso O nivel grupo)
+  var miosCursos=(STATE.cursos||[]).filter(function(c){
+    if(c.instructorId===uid||c.asistenteId===uid) return true;
+    if(maestro&&(c.instructorId===maestro.id||c.asistenteId===maestro.id)) return true;
+    return (c.grupos||[]).some(function(g){
+      return g.instructorId===uid||g.asistenteId===uid
+        ||(maestro&&(g.instructorId===maestro.id||g.asistenteId===maestro.id));
+    });
+  });
+  var html='<div class="page-header fade-in"><h2>📅 Mis Clases</h2></div>'
+    +'<div class="tab-nav" style="margin-bottom:16px">'
+    +_horBtn('hoy','📅 Mis Clases')
+    +_horBtn('cursos','📚 Mis Cursos')
+    +'</div>';
+  if(miosCursos.length===0){
+    html+='<div class="empty"><div class="empty-icon">📚</div>'
+      +'<h3>Sin cursos asignados</h3>'
+      +'<p>Pídele al administrador que te asigne como instructor en un curso o grupo.</p></div>';
+    mc.innerHTML=html; return;
+  }
+  miosCursos.forEach(function(c){
+    var esPrincipal=c.instructorId===uid||(maestro&&c.instructorId===maestro.id);
+    var rol=esPrincipal?'Instructor Principal':'Instructor Asistente';
+    var grupos=(c.grupos&&c.grupos.length)?c.grupos:[];
+    // Filtrar grupos específicamente asignados a este instructor
+    var misGrupos=grupos.filter(function(g){
+      if(!g.instructorId&&!g.asistenteId) return true; // grupo sin asignación específica → hereda del curso
+      return g.instructorId===uid||g.asistenteId===uid
+        ||(maestro&&(g.instructorId===maestro.id||g.asistenteId===maestro.id));
+    });
+    html+='<div class="fade-in" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;margin-bottom:14px">';
+    html+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">';
+    html+='<div style="flex:1"><div style="font-size:17px;font-weight:700">'+esc(c.nombre)+'</div>';
+    html+='<div style="font-size:12px;color:var(--accent);font-weight:600;margin-top:2px">'+rol+'</div></div>';
+    if(c.salon) html+='<span class="badge badge-neutral">'+esc(c.salon)+'</span>';
+    html+='</div>';
+    if(misGrupos.length===0){
+      var infoC=[];
+      if(c.dia) infoC.push('📅 '+c.dia);
+      if(c.horarioDesde&&c.horarioHasta) infoC.push('⏰ '+c.horarioDesde+'-'+c.horarioHasta);
+      html+='<div style="font-size:13px;color:var(--text2)">'+infoC.join(' · ')+'</div>';
+      html+='<div style="font-size:12px;color:var(--text3);margin-top:4px">Sin grupos específicos configurados</div>';
+    } else {
+      misGrupos.forEach(function(g){
+        var infoG=[];
+        if(g.dia||c.dia) infoG.push('📅 '+(g.dia||c.dia));
+        if(g.horarioDesde&&g.horarioHasta) infoG.push('⏰ '+g.horarioDesde+'-'+g.horarioHasta);
+        else if(c.horarioDesde&&c.horarioHasta) infoG.push('⏰ '+c.horarioDesde+'-'+c.horarioHasta);
+        var s=g.salon||c.salon;
+        if(s) infoG.push(s==='Netflix'?'🔴 Netflix':s==='Online'?'💻 Online':'▶️ '+s);
+        html+='<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--surface2)">';
+        html+='<div style="font-weight:600;font-size:13px">'+esc(g.nombre||c.nombre)+'</div>';
+        if(infoG.length) html+='<div style="font-size:12px;color:var(--text3);margin-top:4px">'+infoG.join(' · ')+'</div>';
+        var modulos=(STATE.modulosCurso&&STATE.modulosCurso[g.id])||[];
+        if(modulos.length){
+          html+='<div style="font-size:11px;color:var(--text2);margin-top:6px">Módulos: '
+            +modulos.map(function(m){return esc(m.nombre||m);}).join(', ')+'</div>';
+        }
+        html+='</div>';
+      });
+    }
+    html+='</div>';
+  });
+  mc.innerHTML=html;
+}
+
 
 function renderCursosInstructor(){
   var mc=document.getElementById('main-content');
@@ -1819,21 +1894,75 @@ function renderDashboard(){
 // ════════════════════════════════════════════════
 //  MATRÍCULAS
 // ════════════════════════════════════════════════
+let _matQ='';
+let _horSubTab='hoy';
+function switchHorTab(t){_horSubTab=t;renderHorarios();}
+function _horBtn(id,lbl){
+  return '<button class="tab-btn'+(_horSubTab===id?' active':'')+'" onclick="switchHorTab(\''+id+'\')">'+lbl+'</button>';
+}
+
+
+function _renderMatTable(){
+  const el=document.getElementById('mat-tabla');
+  if(!el) return;
+  const q=(_matQ||'').toLowerCase();
+  const cm=monthStr();
+  const list=STATE.matrículas.filter(function(m){
+    return !q
+      ||m.alumno?.toLowerCase().includes(q)
+      ||m.titular?.toLowerCase().includes(q)
+      ||m.curso?.toLowerCase().includes(q)
+      ||String(m.folio).includes(q);
+  });
+  if(list.length===0){
+    el.innerHTML='<div class="empty"><div class="empty-icon">📋</div><h3>'+t('mat_sin_mat')+'</h3><p>'+t('mat_sin_mat_sub')+'</p></div>';
+    return;
+  }
+  el.innerHTML='<div class="table-wrap fade-in"><table>'
+    +'<thead><tr>'
+    +'<th style="width:36px;padding:8px;text-align:center">'+(hasPerm('eliminar_matriculas')?'<input type="checkbox" id="mat-select-all" onchange="toggleSelectAllMat(this)" style="width:15px;height:15px">':'')+'</th>'
+    +'<th>'+t('mat_col_folio')+'</th>'
+    +'<th>'+t('mat_col_alumno')+'</th>'
+    +'<th>'+t('mat_col_curso')+'</th>'
+    +'<th>'+t('mat_col_pago')+'</th>'
+    +'<th>'+t('mat_col_fecha')+'</th>'
+    +'<th style="width:80px"></th>'
+    +'</tr></thead><tbody>'
+    +list.map(function(m){
+      var pMes=STATE.pagosRegulares.filter(function(p){return p.alumnoNombre===m.alumno&&p.meses&&p.meses.includes(cm);});
+      var pagadoMes=pMes.length>0;
+      var pagosMesStr=pMes.map(function(p){return'$'+(p.monto||0).toLocaleString('es-MX');}).join(', ')||'';
+      var PM=fmtMXN(parseFloat(String((m.pagoMensual!=null?m.pagoMensual:m.primerPago)||0).replace(/[^0-9.]/g,'')));
+      var esUnico=m.pagoTipo==='unico';
+      var pagoLabel=esUnico?('<span style="font-size:10px;color:var(--text3)">Pago único</span> '+fmtMXN(m.primerPago||0))
+        :('1er: '+fmtMXN(m.primerPago||0)+(m.pagoMensual!=null&&m.pagoMensual!==m.primerPago?' <span style="color:var(--text3);font-size:11px">· Mensual: '+PM+'</span>':''));
+      return '<tr>'
+        +'<td style="text-align:center;padding:6px 8px">'+(hasPerm('eliminar_matriculas')?'<input type="checkbox" class="mat-chk" value="'+m.folio+'" onchange="updateBulkBarMat()" style="width:15px;height:15px">':'')+'</td>'
+        +'<td class="mono" style="font-weight:600">#'+m.folio+'</td>'
+        +'<td><div style="font-weight:600">'+esc(m.alumno)+'</div>'+(m.titular&&m.titular!==m.alumno?'<div style="font-size:11px;color:var(--text3)">'+esc(m.titular)+'</div>':'')+'</td>'
+        +'<td>'+esc(m.curso||'—')+(m.grupoNombre?'<br><span style="font-size:11px;color:var(--text3)">'+esc(m.grupoNombre)+'</span>':'')+'</td>'
+        +'<td>'+pagoLabel+(pagadoMes?'<br><span style="font-size:10px;color:var(--green)">✓ Pagado '+cm+': '+pagosMesStr+'</span>':'')+'</td>'
+        +'<td style="font-size:12px;color:var(--text3)">'+(m.fecha||'—')+'</td>'
+        +'<td style="text-align:right;white-space:nowrap;padding:4px 8px">'
+        +(hasPerm('editar_matriculas')?'<button class="btn-ghost btn-sm" onclick="showModalEditarMatricula('+m.folio+')" style="margin-right:4px"><i class="ti ti-edit"></i></button>':'')
+        +(hasPerm('descargar_contratos')?'<button class="btn-green btn-sm" onclick="descargarContrato('+m.folio+')" style="margin-right:4px"><i class="ti ti-file-download"></i> '+t('mat_contrato')+'</button>':'')
+        +(hasPerm('eliminar_matriculas')?'<button class="btn-danger btn-sm" onclick="confirmarBajaAlumno('+m.folio+')" title="'+t('baja_titulo')+'"><i class="ti ti-user-off"></i></button>':'')
+        +'</td></tr>';
+    }).join('')
+    +'</tbody></table></div>';
+}
+
 function renderMatriculas(){
   if(!hasPerm('ver_matriculas')){document.getElementById('main-content').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><h3>'+t('sin_acceso')+'</h3><p>'+t('sin_acceso_desc')+'</p></div>'; return;}
-  const q=(document.getElementById('mat-q')||{value:''}).value?.toLowerCase()||'';
-  const list=STATE.matrículas.filter(m=>!q||m.alumno?.toLowerCase().includes(q)||m.titular?.toLowerCase().includes(q)||m.curso?.toLowerCase().includes(q)||String(m.folio).includes(q));
-  const _mq=document.getElementById('mat-q');
-  const _mqF=document.activeElement===_mq;
-  const _mqS=_mq?[_mq.selectionStart,_mq.selectionEnd]:[0,0];
+  _matQ='';
   document.getElementById('main-content').innerHTML=`
   <div class="page-header fade-in">
     <h2>Matrículas</h2>
     <p>${STATE.matrículas.length} ${t('mat_registrados')}</p>
   </div>
   <div class="toolbar">
-    <input id="mat-q" type="text" placeholder="🔍 Buscar por alumno, titular, curso, folio…" style="flex:1;max-width:380px" value="${q}" oninput="renderMatriculas()">
-    ${hasPerm('crear_matriculas')?`<button class="btn-primary" onclick="showModalNuevaMatricula()"><i class="ti ti-plus"></i> ${t('mat_nueva')}</button>`:''}
+    <input id="mat-q" type="text" placeholder="🔍 Buscar por alumno, titular, curso, folio…" style="flex:1;max-width:380px" value="" oninput="_matQ=this.value;_renderMatTable()">
+    ${hasPerm('crear_matriculas')?`<button class="btn-primary btn-sm" onclick="navigate('nueva_mat')"><i class="ti ti-plus"></i> ${t('mat_nueva')}</button>`:''}
     ${hasPerm('exportar_excel')?`<button class="btn-ghost btn-sm" onclick="exportarExcel()"><i class="ti ti-download"></i> Excel</button>`:''}${hasPerm('crear_matriculas')?`<button class="btn-indigo btn-sm" onclick="showModalImportar()"><i class="ti ti-file-import"></i> ${t('imp_btn')}</button>`:''}
   </div>
   ${hasPerm('eliminar_matriculas')?`
@@ -1849,37 +1978,10 @@ function renderMatriculas(){
     <button class="btn-danger btn-sm" onclick="eliminarMatriculasSeleccionadas()">
       <i class="ti ti-trash"></i> Eliminar seleccionadas
     </button>
-  </div>`:''}
-  ${list.length===0?`<div class="empty"><div class="empty-icon">📋</div><h3>${t('mat_sin_mat')}</h3><p>${q?t('mat_sin_mat_sub'):t('mat_sin_mat_sub')}</p></div>`:`
-  <div class="table-wrap fade-in">
-    <table>
-      <thead><tr><th style="width:36px;padding:8px;text-align:center">${hasPerm('eliminar_matriculas')?'<input type="checkbox" id="mat-select-all" onchange="toggleSelectAllMat(this)" style="width:15px;height:15px">':''}</th><th>${t('mat_folio')}</th><th>${t('mat_alumno')}</th><th>${t('mat_titular')}</th><th>${t('mat_curso')}</th><th>${t('mat_primer_pago')}</th><th>${t('mat_fecha')}</th><th>Edad</th><th>Creado por</th><th>${t('acciones')}</th></tr></thead>
-      <tbody>
-      ${list.map(m=>`<tr>
-        <td style="width:36px;text-align:center;padding:8px">${hasPerm('eliminar_matriculas')?`<input type="checkbox" class="mat-chk" value="${m.folio}" onchange="updateBulkBarMat()" style="width:15px;height:15px">`:''}</td>
-        <td><span class="folio-tag">#${m.folio}</span></td>
-        <td><div style="font-weight:600">${m.alumno}</div><div style="font-size:11px;color:var(--text3)">${m.email||''}</div></td>
-        <td>${m.titular}</td>
-        <td><span class="badge badge-admin">${m.curso}</span></td>
-        <td><span class="monto-tag">${fmtMXN(parseFloat(String(m.primerPago||0).replace(/[^0-9.]/g,'')))}</span>${m.autorizacionPendiente?`<div style="font-size:10px;color:var(--danger);font-weight:700;margin-top:2px">⚠ Pendiente autorización</div>`:''}</td>
-        <td style="font-size:12px;color:var(--text2)">${m.fecha||'—'}</td>
-        <td style="font-size:12px;color:var(--text2)">${(function(){var e=calcEdad(m.nacimiento);return e!==null?e+' años':'—';})()}</td>
-        <td style="font-size:12px">${m.createdBy||'—'}</td>
-        <td style="white-space:nowrap">
-          ${hasPerm('editar_matriculas')?`<button class="btn-ghost btn-sm" onclick="showModalEditarMatricula(${m.folio})" style="margin-right:4px"><i class="ti ti-edit"></i></button>`:''}
-          ${hasPerm('descargar_contratos')?`<button class="btn-green btn-sm" onclick="descargarContrato(${m.folio})" style="margin-right:4px"><i class="ti ti-file-download"></i> ${t('mat_contrato')}</button>`:''}
-          ${hasPerm('eliminar_matriculas')?`<button class="btn-danger btn-sm" onclick="confirmarBajaAlumno(${m.folio})" title="${t('baja_titulo')}"><i class="ti ti-user-off"></i></button>`:''}
-        </td>
-      </tr>`).join('')}
-      </tbody>
-    </table>
-  </div>`}`;
-
-  // Restaurar foco en la barra de búsqueda después de re-render
-  if(_mqF){
-    const nq=document.getElementById('mat-q');
-    if(nq){nq.focus();try{nq.setSelectionRange(_mqS[0],_mqS[1]);}catch(e){}}
-  }}
+  </div>`:``}
+  <div id="mat-tabla"></div>`;
+  _renderMatTable();
+}
 
 
 // Highlight missing/invalid field
@@ -4824,10 +4926,16 @@ function renderInactivos() {
     ${hasPerm('exportar_excel')?`<button class="btn-ghost btn-sm" onclick="exportarInactivosExcel()"><i class="ti ti-download"></i> Excel</button>`:''}
   </div>
 
+  <div id="inac-bulk-bar" style="display:none;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 16px;align-items:center;gap:14px;margin-bottom:10px">
+    <span id="inac-bulk-count" style="font-weight:700;font-size:13px;flex:1">0 seleccionados</span>
+    <button class="btn-green btn-sm" onclick="reactivarExAlumnosSeleccionados()"><i class="ti ti-user-check"></i> Reactivar seleccionados</button>
+    <button class="btn-danger btn-sm" onclick="eliminarExAlumnosSeleccionados()"><i class="ti ti-trash"></i> Eliminar seleccionados</button>
+  </div>
   ${list.length===0?`<div class="empty"><div class="empty-icon">🎓</div><h3>${t('inac_vacio')}</h3><p>${t('inac_vacio_sub')}</p></div>`:`
   <div class="table-wrap fade-in">
     <table>
       <thead><tr>
+        <th style="width:36px"><input type="checkbox" id="inac-select-all" onchange="toggleSelectAllInac(this)" style="width:15px;height:15px"></th>
         <th>${t('inac_alumno')}</th>
         <th>${t('inac_cursos')}</th>
         <th>${t('inac_email')}</th>
@@ -4838,6 +4946,7 @@ function renderInactivos() {
       </tr></thead>
       <tbody>
       ${list.map(a=>`<tr>
+        <td style="text-align:center;padding:6px 8px"><input type="checkbox" class="inac-chk" data-id="${a.id}" onchange="updateBulkBarInac()" style="width:15px;height:15px"></td>
         <td>
           <div style="font-weight:600;cursor:pointer" onclick="showFichaInactivo('${a.id}')" title="Ver ficha">${a.alumno} <i class="ti ti-external-link" style="font-size:10px;color:var(--accent);opacity:.6"></i></div>
           ${a.titular&&a.titular!==a.alumno?`<div style="font-size:11px;color:var(--text3)">👤 ${a.titular}</div>`:''}
@@ -4850,6 +4959,9 @@ function renderInactivos() {
         <td><span class="badge badge-neutral" style="font-size:10px">${a.motivoBaja||t('inac_sin_motivo')}</span></td>
         <td style="font-size:12px;color:var(--text2);font-family:'DM Mono',monospace">${a.fechaBaja||'—'}</td>
         <td style="white-space:nowrap">
+          <button class="btn-green btn-sm" onclick="showModalReactivarAlumno('${a.id}')" title="Reactivar" style="margin-right:4px">
+            <i class="ti ti-user-check"></i>
+          </button>
           <button class="btn-danger btn-sm" onclick="eliminarInactivoPermanente('${a.id}')" title="${t('inac_elim')}">
             <i class="ti ti-trash"></i>
           </button>
@@ -4858,6 +4970,167 @@ function renderInactivos() {
       </tbody>
     </table>
   </div>`}`;
+}
+
+
+function toggleSelectAllInac(el){
+  document.querySelectorAll('.inac-chk').forEach(function(c){c.checked=el.checked;});
+  updateBulkBarInac();
+}
+
+function updateBulkBarInac(){
+  var checked=document.querySelectorAll('.inac-chk:checked');
+  var bar=document.getElementById('inac-bulk-bar');
+  if(bar){
+    bar.style.display=checked.length>0?'flex':'none';
+    var cnt=document.getElementById('inac-bulk-count');
+    if(cnt) cnt.textContent=checked.length+' seleccionado'+(checked.length!==1?'s':'');
+  }
+}
+
+async function eliminarExAlumnosSeleccionados(){
+  var ids=[...document.querySelectorAll('.inac-chk:checked')].map(function(c){return c.dataset.id;});
+  if(!ids.length) return;
+  if(!confirm('¿Eliminar definitivamente '+ids.length+' ex-alumno(s)? Esta acción no se puede deshacer.')) return;
+  STATE.alumnosInactivos=(STATE.alumnosInactivos||[]).filter(function(a){return!ids.includes(a.id);});
+  await saveState();
+  renderInactivos();
+}
+
+async function reactivarExAlumnosSeleccionados(){
+  var ids=[...document.querySelectorAll('.inac-chk:checked')].map(function(c){return c.dataset.id;});
+  if(!ids.length) return;
+  if(ids.length===1){
+    showModalReactivarAlumno(ids[0]);
+  } else {
+    showModalReactivarMasivo(ids);
+  }
+}
+
+function showModalReactivarAlumno(id){
+  var a=(STATE.alumnosInactivos||[]).find(function(x){return x.id===id;});
+  if(!a) return;
+  var mc=document.getElementById('modal-container');
+  var cursosOpts=(STATE.cursos||[]).map(function(c){return '<option value="'+c.nombre+'">'+c.nombre+'</option>';}).join('');
+  mc.innerHTML='<div class="moverlay"><div class="modal" style="max-width:480px">'
+    +'<div class="modal-hdr"><div class="modal-title"><i class="ti ti-user-check"></i> Reactivar a '+esc(a.alumno)+'</div>'
+    +'<button class="modal-close" onclick="closeModal()">✕</button></div>'
+    +'<div class="modal-body">'
+    +'<div style="background:var(--accent-light);border:1px solid rgba(107,45,146,.2);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px">'
+    +'Se creará una nueva matrícula y un contrato nuevo para este alumno.</div>'
+    +'<div class="form-grid">'
+    +'<div class="form-group span2"><label class="flbl">Curso al que se reincorpora *</label>'
+    +'<select id="reac-curso" onchange="reacActualizarGrupo()"><option value="">— Selecciona —</option>'+cursosOpts+'</select></div>'
+    +'<div class="form-group span2" id="reac-grupo-cont" style="display:none"><label class="flbl">Grupo</label><select id="reac-grupo"></select></div>'
+    +'<div class="form-group"><label class="flbl">Primer pago (MXN)</label><input type="number" id="reac-pago" value=""></div>'
+    +'<div class="form-group"><label class="flbl">Fecha</label><input type="date" id="reac-fecha" value="'+todayISO()+'"></div>'
+    +'</div>'
+    +'<div class="form-actions">'
+    +'<button class="btn-ghost" onclick="closeModal()">Cancelar</button>'
+    +'<button class="btn-primary" data-id="'+id+'" onclick="ejecutarReactivacion(this.dataset.id)"><i class="ti ti-check"></i> Reactivar y crear contrato</button>'
+    +'</div></div></div></div>';
+}
+
+function showModalReactivarMasivo(ids){
+  var mc=document.getElementById('modal-container');
+  var cursosOpts=(STATE.cursos||[]).map(function(c){return '<option value="'+c.nombre+'">'+c.nombre+'</option>';}).join('');
+  window._reacIds=ids;
+  mc.innerHTML='<div class="moverlay"><div class="modal" style="max-width:480px">'
+    +'<div class="modal-hdr"><div class="modal-title"><i class="ti ti-users-check"></i> Reactivar '+ids.length+' ex-alumnos</div>'
+    +'<button class="modal-close" onclick="closeModal()">✕</button></div>'
+    +'<div class="modal-body">'
+    +'<div style="background:var(--accent-light);border:1px solid rgba(107,45,146,.2);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px">'
+    +'Se crearán '+ids.length+' nuevas matrículas y contratos. Todos se asignarán al mismo curso/grupo.</div>'
+    +'<div class="form-grid">'
+    +'<div class="form-group span2"><label class="flbl">Curso *</label>'
+    +'<select id="reac-curso" onchange="reacActualizarGrupo()"><option value="">— Selecciona —</option>'+cursosOpts+'</select></div>'
+    +'<div class="form-group span2" id="reac-grupo-cont" style="display:none"><label class="flbl">Grupo</label><select id="reac-grupo"></select></div>'
+    +'<div class="form-group"><label class="flbl">Primer pago (MXN)</label><input type="number" id="reac-pago" value=""></div>'
+    +'<div class="form-group"><label class="flbl">Fecha</label><input type="date" id="reac-fecha" value="'+todayISO()+'"></div>'
+    +'</div>'
+    +'<div class="form-actions">'
+    +'<button class="btn-ghost" onclick="closeModal()">Cancelar</button>'
+    +'<button class="btn-primary" onclick="ejecutarReactivacionMasiva(window._reacIds)"><i class="ti ti-check"></i> Reactivar todos y crear contratos</button>'
+    +'</div></div></div></div>';
+}
+
+function reacActualizarGrupo(){
+  var cn=document.getElementById('reac-curso')?.value;
+  var c=(STATE.cursos||[]).find(function(x){return x.nombre===cn;});
+  var cont=document.getElementById('reac-grupo-cont');
+  var sel=document.getElementById('reac-grupo');
+  if(!c||!c.grupos||!c.grupos.length){if(cont)cont.style.display='none';return;}
+  if(cont) cont.style.display='block';
+  if(sel) sel.innerHTML='<option value="">— Sin grupo específico —</option>'
+    +c.grupos.map(function(g){return'<option value="'+g.id+'">'+g.nombre+'</option>';}).join('');
+}
+
+async function ejecutarReactivacion(id){
+  var a=(STATE.alumnosInactivos||[]).find(function(x){return x.id===id;});
+  if(!a) return;
+  var curso=document.getElementById('reac-curso')?.value;
+  if(!curso){alert('Selecciona un curso.');return;}
+  var grupoId=document.getElementById('reac-grupo')?.value||null;
+  var c=(STATE.cursos||[]).find(function(x){return x.nombre===curso;});
+  var g=c&&grupoId?c.grupos?.find(function(x){return x.id===grupoId;}):null;
+  var pago=parseFloat(document.getElementById('reac-pago')?.value)||c?.costoBase||0;
+  var fecha=document.getElementById('reac-fecha')?.value||todayISO();
+  var folio=STATE.nextFolio++;
+  STATE.matrículas.push({
+    folio,alumno:a.alumno,nacimiento:'',curso,
+    titular:a.titular||a.alumno,email:a.email||'',telefono:a.telefono||'',
+    primerPago:pago,pagoTipo:'mensual',pagoMensual:null,
+    grupoId,grupoNombre:g?g.nombre:null,
+    fecha:fmtFecha(fecha),fechaISO:fecha,
+    notas:'Reactivado desde Ex-alumnos',
+    createdAt:new Date().toISOString(),createdBy:currentUser.username,
+  });
+  STATE.alumnosInactivos=(STATE.alumnosInactivos||[]).filter(function(x){return x.id!==id;});
+  await saveState();
+  closeModal();
+  renderInactivos();
+  // Generar y descargar el contrato nuevo automáticamente
+  if(typeof descargarContrato==='function'){
+    setTimeout(function(){descargarContrato(folio);},400);
+  } else {
+    alert('✅ '+a.alumno+' reactivado con folio #'+folio+'. Descarga el contrato desde Matrículas.');
+  }
+}
+
+async function ejecutarReactivacionMasiva(ids){
+  var curso=document.getElementById('reac-curso')?.value;
+  if(!curso){alert('Selecciona un curso.');return;}
+  var grupoId=document.getElementById('reac-grupo')?.value||null;
+  var c=(STATE.cursos||[]).find(function(x){return x.nombre===curso;});
+  var g=c&&grupoId?c.grupos?.find(function(x){return x.id===grupoId;}):null;
+  var pago=parseFloat(document.getElementById('reac-pago')?.value)||c?.costoBase||0;
+  var fecha=document.getElementById('reac-fecha')?.value||todayISO();
+  var count=0;
+  ids.forEach(function(id){
+    var a=(STATE.alumnosInactivos||[]).find(function(x){return x.id===id;});
+    if(!a) return;
+    var folio=STATE.nextFolio++;
+    STATE.matrículas.push({
+      folio,alumno:a.alumno,nacimiento:'',curso,
+      titular:a.titular||a.alumno,email:a.email||'',telefono:a.telefono||'',
+      primerPago:pago,pagoTipo:'mensual',pagoMensual:null,
+      grupoId,grupoNombre:g?g.nombre:null,
+      fecha:fmtFecha(fecha),fechaISO:fecha,
+      notas:'Reactivado masivamente desde Ex-alumnos',
+      createdAt:new Date().toISOString(),createdBy:currentUser.username,
+    });
+    count++;
+  });
+  STATE.alumnosInactivos=(STATE.alumnosInactivos||[]).filter(function(x){return!ids.includes(x.id);});
+  await saveState();
+  closeModal();
+  renderInactivos();
+  // Navegar a matrículas para que pueda descargar los contratos nuevos
+  if(count>0){
+    if(confirm('✅ '+count+' alumno(s) reactivados.\n\n¿Quieres ir a Matrículas para descargar sus contratos?')){
+      navigate('matriculas');
+    }
+  }
 }
 
 
@@ -6072,6 +6345,7 @@ function autoFinalizarSesionesPasadas(){
 function renderHorarios(){
  try {
   autoFinalizarSesionesPasadas(); // cierra automáticamente si pasó horarioHasta
+  if(_horSubTab==='cursos'){renderHorariosSubCursos();return;}
   var uid=currentUser.id;
   var hoy=todayISO();
   var diaHoy=diaHoyNombre();
@@ -6104,8 +6378,12 @@ function renderHorarios(){
   var deHoy = todas.filter(function(t){return diasOverlap(diaHoy, t.g.dia||t.c.dia);});
   var otros = todas.filter(function(t){return !diasOverlap(diaHoy, t.g.dia||t.c.dia);});
 
-  var header='<div class="page-header fade-in"><h2>📅 Horarios</h2><p>Hoy: '+diaHoy+', '
-    +new Date().toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})+'</p></div>';
+  var header='<div class="page-header fade-in"><h2>📅 Mis Clases</h2><p>Hoy: '+diaHoy+', '
+    +new Date().toLocaleDateString('es-MX',{day:'numeric',month:'long',year:'numeric'})+'</p></div>'
+    +'<div class="tab-nav" style="margin-bottom:16px">'
+    +_horBtn('hoy','📅 Mis Clases')
+    +_horBtn('cursos','📚 Mis Cursos')
+    +'</div>';
 
   var html=header;
   if(deHoy.length===0){
@@ -6130,7 +6408,11 @@ function renderHorarios(){
   mc.innerHTML = html;
  } catch(err) {
   document.getElementById('main-content').innerHTML =
-    '<div class="page-header fade-in"><h2>📅 Horarios</h2></div>'
+    '<div class="page-header fade-in"><h2>📅 Mis Clases</h2></div>'
+    +'<div class="tab-nav" style="margin-bottom:16px">'
+    +_horBtn('hoy','📅 Mis Clases')
+    +_horBtn('cursos','📚 Mis Cursos')
+    +'</div>'
     +'<div class="empty"><div class="empty-icon">⚠️</div><h3>Error al cargar Horarios</h3>'
     +'<pre style="white-space:pre-wrap;font-size:11px;color:var(--danger);text-align:left;background:var(--surface2);padding:12px;border-radius:8px;overflow:auto;max-width:100%">'
     +String((err&&err.stack)||(err&&err.message)||err).replace(/</g,'&lt;')
@@ -6434,7 +6716,17 @@ function renderHorariosAdmin(){
 
   // Construir lista de todos los grupos con su instructor
   var todos=[];
+  var _yaGrupo=new Set();
   (STATE.cursos||[]).forEach(function(c){
+    (c.grupos||[]).forEach(function(g){
+      // Filtrar por _originalCursoId explícito
+      if(g._originalCursoId) _yaGrupo.add(g._originalCursoId);
+      // También filtrar si el id del grupo coincide con un id de curso
+      // (indica que ese curso fue convertido a grupo)
+      if(g.id && !g.id.startsWith('_main')) _yaGrupo.add(g.id);
+    });
+  });
+  (STATE.cursos||[]).filter(function(c){return!_yaGrupo.has(c.id);}).forEach(function(c){
     var grupos=(c.grupos&&c.grupos.length)?c.grupos:[{
       id:'_main_'+c.id,nombre:c.nombre,salon:c.salon,dia:c.dia,
       horarioDesde:c.horarioDesde,horarioHasta:c.horarioHasta,
@@ -6617,7 +6909,8 @@ async function editarAsistenciaAdmin(btn){
 // ════════════════════════════════════════════════
 
 function renderMaestros(){
-  const cm = monthStr();
+  const mesActual = monthStr();
+  const cm = prevMonth(mesActual); // las horas se pagan a mes caído
   const canEdit = hasPerm('gestionar_cursos') || hasPerm('modo_dios');
   const esInstructor = currentUser.role === 'instructor';
   const inst = STATE.instructores || [];
@@ -6696,6 +6989,16 @@ function renderMaestros(){
       + '</tr>';
   }).join('');
 
+  var totalSigMes = inst.reduce(function(acc,p){
+    var hP=(STATE.sesionesClase||[]).filter(function(s){
+      return s.mes===mesActual&&(s.instructorId===p.id||(p.userId&&s.instructorId===p.userId))&&s.estadoP==='finalizada';
+    }).reduce(function(a,s){return a+(s.horasInstructor||0);},0);
+    var hA=(STATE.sesionesClase||[]).filter(function(s){
+      return s.mes===mesActual&&(s.asistenteId===p.id||(p.userId&&s.asistenteId===p.userId))&&s.estadoA==='finalizada';
+    }).reduce(function(a,s){return a+(s.horasAsistente||0);},0);
+    var ta=p.tarifaHoraAsistente||p.tarifaHora||0;
+    return acc+hP*(p.tarifaHora||0)+hA*ta;
+  },0);
   var totalAPagar = inst.reduce(function(acc,p){
     var _o=horasImpartidas(p.id);var ta=p.tarifaHoraAsistente||p.tarifaHora; return acc+_o.hPrincipal*(p.tarifaHora||0)+_o.hAsistente*(ta||0);
   }, 0);
@@ -6715,7 +7018,8 @@ function renderMaestros(){
     + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px">'
     + statsCard('Instructores activos', inst.filter(function(p){return p.activo!==false;}).length, '')
     + statsCard('Horas impartidas '+mesLabel(cm), inst.reduce(function(a,p){return a+horasImpartidas(p.id).total;},0).toFixed(1)+' hrs', 'var(--accent)')
-    + statsCard('A pagar este mes', fmtMXN(totalAPagar), 'var(--green)')
+    + statsCard('A pagar este mes (horas de '+mesLabel(cm)+')', fmtMXN(totalAPagar), 'var(--green)')
+    + statsCard('A pagar el siguiente mes (horas de '+mesLabel(mesActual)+')', fmtMXN(totalSigMes), 'var(--accent)')
     + statsCard('Presupuesto planeado', fmtMXN(totalPlaneado), 'var(--text2)')
     + '</div>'
 
@@ -6729,7 +7033,7 @@ function renderMaestros(){
     )
 
     // Payment alert if ≥10th of month
-    + generarAlertaPago(totalAPagar, cm);
+    + generarAlertaPago(totalAPagar, cm, cm);
 }
 
 function statsCard(label, value, color){
@@ -6737,7 +7041,7 @@ function statsCard(label, value, color){
     + '<div class="ms-val" style="'+(color?'color:'+color:'')+'">'+value+'</div></div>';
 }
 
-function generarAlertaPago(total, cm){
+function generarAlertaPago(total, cm, mesHoras){
   var dia = new Date().getDate();
   if(dia < 8 || total <= 0) return '';
   var diaSemana = new Date().getDay();
@@ -6747,7 +7051,7 @@ function generarAlertaPago(total, cm){
   if(!aviso) return '';
   return '<div style="background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:10px;padding:14px 18px;margin-top:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">'
     + '<div><div style="font-weight:700;color:#92600a">'+aviso+'</div>'
-    + '<div style="font-size:13px;color:var(--text2);margin-top:2px">Total a pagar: <strong>'+fmtMXN(total)+'</strong> — basado en horas realmente impartidas</div></div>'
+    + '<div style="font-size:13px;color:var(--text2);margin-top:2px">Horas de <strong>'+(mesHoras?mesLabel(mesHoras):mesLabel(cm))+'</strong> — Total: <strong>'+fmtMXN(total)+'</strong></div></div>'
     + '<button class="btn-primary" onclick="confirmarPagoInstructores()"><i class="ti ti-check"></i> Confirmar y registrar pago</button>'
     + '</div>';
 }
