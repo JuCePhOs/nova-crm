@@ -4078,7 +4078,7 @@ function renderGrupoRow(g, idx) {
 
     // Nombre
     +'<div class="form-group span2"><label class="flbl">'+t('cur_grupo_nombre')+'</label>'
-    +'<input id="gn-'+idx+'" placeholder="Ej: Semana 1: Python, Grupo Lunes" value="'+(g.nombre||'')+'" oninput="updateGrupo('+idx+',\'nombre\',this.value)"></div>'
+    +'<input id="gn-'+idx+'" placeholder="Ej: Semana 1: Python, Grupo Lunes" value="'+(g.nombre||'')+'" oninput="updateGrupo('+idx+',\'nombre\',this.value)" onblur="detectarCursoExistentePorNombre('+idx+')"></div>'
 
     // Nivel
     +'<div class="form-group"><label class="flbl">'+t('cur_campo_nivel')+'</label>'
@@ -4186,6 +4186,50 @@ function updateGrupoConflict(idx, field, val) {
     alertEl.style.display = conflict ? 'block' : 'none';
     if(conflict) alertEl.textContent = t('cur_grupo_conflicto')+' Conflicto con: '+conflict;
   }
+}
+
+// Si el nombre escrito a mano para un grupo coincide EXACTAMENTE con un curso
+// standalone ya existente, se asume que el usuario quiere migrar ese curso como
+// grupo (igual que el botón "Usar curso existente") en vez de crear uno nuevo
+// que choque de horario con él. Autocompleta los datos y excluye el conflicto.
+function detectarCursoExistentePorNombre(idx){
+  const g = _modalGrupos[idx];
+  if(!g || !g.nombre) return;
+  if(g._fromCurso) return; // ya viene de "Usar curso existente", no tocar
+  const nombreBuscado = g.nombre.trim().toLowerCase();
+  if(!nombreBuscado) return;
+  const nombreOriginal = document.getElementById('mc-nombre')?.value?.trim()||'';
+  const cPadre = STATE.cursos.find(x=>x.nombre===nombreOriginal);
+  const match = STATE.cursos.find(function(c){
+    return c.id!==(cPadre&&cPadre.id) && c.nombre.trim().toLowerCase()===nombreBuscado;
+  });
+  if(!match) return;
+  // Autocompletar solo los campos que el usuario aún no llenó, para no pisar
+  // datos que ya haya editado a mano para este grupo
+  if(!g.salon) g.salon = match.salon||'';
+  if(!g.dia) g.dia = match.dia||'';
+  if(!g.horarioDesde) g.horarioDesde = match.horarioDesde||'';
+  if(!g.horarioHasta) g.horarioHasta = match.horarioHasta||'';
+  if(!g.nivel) g.nivel = match.nivel||'';
+  if(!g.cupo) g.cupo = match.cupo||'';
+  if(!g.instructorId) g.instructorId = match.instructorId||'';
+  if(!g.costoBase) g.costoBase = match.costoBase||null;
+  g._originalCursoId = match.id;
+  g._fromCurso = true;
+  // Re-renderizar la fila para reflejar los valores autocompletados
+  const cont=document.getElementById('grupos-container');
+  if(cont) cont.innerHTML=_modalGrupos.map((gr,i)=>renderGrupoRow(gr,i)).join('');
+  const aviso=document.getElementById('conflict-'+idx);
+  // Mostrar confirmación breve de que se detectó y vinculó el curso existente
+  setTimeout(function(){
+    var fila=document.getElementById('gn-'+idx);
+    if(fila){
+      var hint=document.createElement('div');
+      hint.style.cssText='color:#16a34a;font-size:11px;font-weight:600;margin-top:3px';
+      hint.textContent='✓ Vinculado al curso existente "'+match.nombre+'" — sus datos se autocompletaron, sin conflicto de horario.';
+      fila.parentElement&&fila.parentElement.appendChild(hint);
+    }
+  },50);
 }
 
 function addModalGrupo() {
