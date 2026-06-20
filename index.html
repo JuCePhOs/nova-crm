@@ -411,7 +411,7 @@ var I18N = {
     mat_sin_mat_sub:'Registra la primera matrícula',
     mat_nueva_titulo:'Nueva Matrícula', mat_editar_titulo:'Editar Matrícula',
     mat_campo_alumno:'Alumno *', mat_campo_nac:'Fecha de nacimiento *',
-    mat_campo_curso:'Curso *', mat_campo_titular:'Titular del contrato *',
+    mat_campo_curso:'Curso *', mat_campo_titular:'Titular del contrato *', mat_col_folio:'Folio', mat_col_alumno:'Alumno', mat_col_curso:'Curso', mat_col_pago:'Pago', mat_col_fecha:'Fecha',
     mat_campo_email:'Correo electrónico *', mat_campo_tel:'Teléfono *',
     mat_campo_pago:'Primer pago (MXN) *', mat_campo_fecha:'Fecha del contrato',
     mat_campo_notas:'Notas', mat_sel_curso:'— Selecciona —',
@@ -646,7 +646,7 @@ var I18N = {
     mat_sin_mat_sub:'Register the first enrollment',
     mat_nueva_titulo:'New Enrollment', mat_editar_titulo:'Edit Enrollment',
     mat_campo_alumno:'Student *', mat_campo_nac:'Date of birth *',
-    mat_campo_curso:'Course *', mat_campo_titular:'Contract holder *',
+    mat_campo_curso:'Course *', mat_campo_titular:'Contract holder *', mat_col_folio:'Folio', mat_col_alumno:'Student', mat_col_curso:'Course', mat_col_pago:'Payment', mat_col_fecha:'Date',
     mat_campo_email:'Email address *', mat_campo_tel:'Phone *',
     mat_campo_pago:'First payment (MXN) *', mat_campo_fecha:'Contract date',
     mat_campo_notas:'Notes', mat_sel_curso:'— Select —',
@@ -876,7 +876,7 @@ var I18N = {
     mat_sin_mat_sub:'Создайте первую запись',
     mat_nueva_titulo:'Новая запись', mat_editar_titulo:'Редактировать запись',
     mat_campo_alumno:'Ученик *', mat_campo_nac:'Дата рождения *',
-    mat_campo_curso:'Курс *', mat_campo_titular:'Плательщик по договору *',
+    mat_campo_curso:'Курс *', mat_campo_titular:'Плательщик по договору *', mat_col_folio:'№', mat_col_alumno:'Студент', mat_col_curso:'Курс', mat_col_pago:'Оплата', mat_col_fecha:'Дата',
     mat_campo_email:'Email *', mat_campo_tel:'Телефон *',
     mat_campo_pago:'Первый платёж (MXN) *', mat_campo_fecha:'Дата договора',
     mat_campo_notas:'Заметки', mat_sel_curso:'— Выберите —',
@@ -1294,8 +1294,12 @@ function dateOverlap(fi1,ff1,fi2,ff2){
 // Returns conflict description or null
 function checkScheduleConflict(salon, desde, hasta, fechaIni, fechaFin, excludeCursoId, excludeGrupoId, dia){
   if(!salon||!desde||!hasta) return null;
+  // excludeCursoId puede ser un único id o un array de ids a excluir
+  // (necesario cuando un curso existente se convierte en grupo: hay que
+  // excluir tanto el curso padre como el curso original del que se tomó el grupo)
+  const excludeIds = Array.isArray(excludeCursoId) ? excludeCursoId.filter(Boolean) : (excludeCursoId?[excludeCursoId]:[]);
   for(const c of STATE.cursos){
-    if(c.id===excludeCursoId) continue;
+    if(excludeIds.includes(c.id)) continue;
     const grupos = c.grupos&&c.grupos.length ? c.grupos : [{
       id:'_main',salon:c.salon,horarioDesde:c.horarioDesde||'',horarioHasta:c.horarioHasta||'',
       fechaInicio:c.fechaInicio,fechaFin:c.fechaFin,nombre:c.nombre,dia:c.dia||''
@@ -1443,7 +1447,7 @@ function renderHorariosSubCursos(){
         if(g.horarioDesde&&g.horarioHasta) infoG.push('⏰ '+g.horarioDesde+'-'+g.horarioHasta);
         else if(c.horarioDesde&&c.horarioHasta) infoG.push('⏰ '+c.horarioDesde+'-'+c.horarioHasta);
         var s=g.salon||c.salon;
-        if(s) infoG.push(s==='Netflix'?'🔴 Netflix':s==='Online'?'💻 Online':'▶️ '+s);
+        if(s) infoG.push(s==='Netflix'?'🔵 Netflix':s==='Youtube'?'🔴 Youtube':s==='Online'?'💻 Online':'▶️ '+s);
         html+='<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;background:var(--surface2)">';
         html+='<div style="font-weight:600;font-size:13px">'+esc(g.nombre||c.nombre)+'</div>';
         if(infoG.length) html+='<div style="font-size:12px;color:var(--text3);margin-top:4px">'+infoG.join(' · ')+'</div>';
@@ -1964,7 +1968,7 @@ function renderMatriculas(){
   </div>
   <div class="toolbar">
     <input id="mat-q" type="text" placeholder="🔍 Buscar por alumno, titular, curso, folio…" style="flex:1;max-width:380px" value="" oninput="_matQ=this.value;_renderMatTable()">
-    ${hasPerm('crear_matriculas')?`<button class="btn-primary btn-sm" onclick="navigate('nueva_mat')"><i class="ti ti-plus"></i> ${t('mat_nueva')}</button>`:''}
+    ${hasPerm('crear_matriculas')?`<button class="btn-primary btn-sm" onclick="showModalNuevaMatricula()"><i class="ti ti-plus"></i> ${t('mat_nueva')}</button>`:''}
     ${hasPerm('exportar_excel')?`<button class="btn-ghost btn-sm" onclick="exportarExcel()"><i class="ti ti-download"></i> Excel</button>`:''}${hasPerm('crear_matriculas')?`<button class="btn-indigo btn-sm" onclick="showModalImportar()"><i class="ti ti-file-import"></i> ${t('imp_btn')}</button>`:''}
   </div>
   ${hasPerm('eliminar_matriculas')?`
@@ -2747,17 +2751,23 @@ function renderPagos(){
     <div class="stat-card" style="--stripe:var(--warn)"><div class="stat-label">${t('pag_promos')}</div><div class="stat-val">${STATE.promociones.filter(p=>p.activa&&p.fechaFin>=cm).length}</div><div class="stat-sub">disponibles para aplicar</div></div>
   </div>
   <div class="tab-nav">
-    <button class="tab-btn${pagoSubTab==='registrar'?' active':''}" onclick="switchPagoTab('registrar')"><i class="ti ti-plus"></i> ${t('pag_tab_registrar')}</button>
-    <button class="tab-btn${pagoSubTab==='historial'?' active':''}" onclick="switchPagoTab('historial')"><i class="ti ti-list"></i> ${t('pag_tab_historial')}</button>
-    <button class="tab-btn${pagoSubTab==='masivo'?' active':''}" onclick="switchPagoTab('masivo')"><i class="ti ti-cash-banknote"></i> Pago Masivo</button>
-    <button class="tab-btn${pagoSubTab==='pendientes'?' active':''}" onclick="switchPagoTab('pendientes')"><i class="ti ti-user-exclamation"></i> ${t('pag_tab_pendientes')} ${pending>0?`<span class="sn-badge" style="background:var(--danger);margin-left:4px">${pending}</span>`:''}</button>
+    <button class="tab-btn${pagoSubTab==='registrar'?' active':''}" data-tab="registrar" onclick="switchPagoTab('registrar')"><i class="ti ti-plus"></i> ${t('pag_tab_registrar')}</button>
+    <button class="tab-btn${pagoSubTab==='historial'?' active':''}" data-tab="historial" onclick="switchPagoTab('historial')"><i class="ti ti-list"></i> ${t('pag_tab_historial')}</button>
+    <button class="tab-btn${pagoSubTab==='masivo'?' active':''}" data-tab="masivo" onclick="switchPagoTab('masivo')"><i class="ti ti-cash-banknote"></i> Pago Masivo</button>
+    <button class="tab-btn${pagoSubTab==='pendientes'?' active':''}" data-tab="pendientes" onclick="switchPagoTab('pendientes')"><i class="ti ti-user-exclamation"></i> ${t('pag_tab_pendientes')} ${pending>0?`<span class="sn-badge" style="background:var(--danger);margin-left:4px">${pending}</span>`:''}</button>
 
   </div>
   <div id="pago-content"></div>`;
   renderPagoTab();
 }
 
-function switchPagoTab(t){pagoSubTab=t;renderPagoTab();}
+function switchPagoTab(t){
+  pagoSubTab=t;
+  document.querySelectorAll('.tab-nav .tab-btn[data-tab]').forEach(function(b){
+    b.classList.toggle('active', b.dataset.tab===t);
+  });
+  renderPagoTab();
+}
 
 function renderPagoTab(){
   const el=document.getElementById('pago-content');
@@ -2784,9 +2794,11 @@ function buildPromoOpts(list){
 //  PAGO MASIVO
 // ════════════════════════════════════════════════
 let _pagoMasivoSel=new Set(); // folios seleccionados
+let _pmMesActual=null; // mes seleccionado en Pago Masivo (null = mes actual)
+let _pmHideMode=false; // true cuando se activó 'Solo sin pago' y se ocultan los ya pagados
 
 function buildPagoMasivo(){
-  const cm=monthStr();
+  const mesSel=_pmMesActual||monthStr();
 
   // Generar opciones de meses (actual + 2 anteriores + 3 futuros)
   var mesesOpts='';
@@ -2794,25 +2806,31 @@ function buildPagoMasivo(){
     var d=new Date();d.setDate(1);d.setMonth(d.getMonth()+mi);
     var ym=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
     var lbl=mesLabel(ym);
-    mesesOpts+='<option value="'+ym+'"'+(mi===0?' selected':'')+'>'+lbl+'</option>';
+    mesesOpts+='<option value="'+ym+'"'+(ym===mesSel?' selected':'')+'>'+lbl+'</option>';
   }
 
-  // Métodos de pago
-  var metOpts=['Efectivo','Transferencia','MercadoPago','Tarjeta','Otro']
-    .map(function(m){return '<option value="'+m+'">'+m+'</option>';}).join('');
+  // Métodos de pago — MISMOS códigos internos que usa el registro individual
+  // ('cash'/'transfer'/'card') para que Contabilidad los reconozca correctamente.
+  // "Tarjeta" y "Mercado Pago" son la MISMA opción: la terminal bancaria de MP.
+  var metOpts=
+    '<option value="cash">💵 Efectivo</option>'
+    +'<option value="transfer">🏦 Transferencia</option>'
+    +'<option value="card">💳 Tarjeta / Terminal MP</option>';
 
   // Lista de alumnos activos con su monto de mensualidad
   var alumnos=STATE.matrículas.filter(function(m){return m.alumno&&m.curso;})
     .sort(function(a,b){return a.alumno.localeCompare(b.alumno);});
 
+  var pagadosSet=new Set((STATE.pagosRegulares||[]).filter(function(p){
+    return (p.meses||[]).includes(mesSel);
+  }).map(function(p){return p.crmFolio;}));
+
   var rows=alumnos.map(function(m){
     var monto=m.pagoMensual!=null?m.pagoMensual:(m.primerPago||0);
-    // ¿Ya pagó el mes seleccionado? (se recalcula al cambiar el mes via JS)
-    var pagado=(STATE.pagosRegulares||[]).some(function(p){
-      return p.crmFolio===m.folio&&(p.meses||[]).includes(cm);
-    });
+    var pagado=pagadosSet.has(m.folio);
     var chk=_pagoMasivoSel.has(m.folio);
-    return '<tr id="pm-row-'+m.folio+'">'
+    var oculto=_pmHideMode&&pagado;
+    return '<tr id="pm-row-'+m.folio+'" data-folio="'+m.folio+'" data-pagado="'+(pagado?'1':'0')+'"'+(oculto?' style="display:none"':'')+'>'
       +'<td style="text-align:center;padding:6px 8px">'
         +'<input type="checkbox" class="pm-chk" value="'+m.folio+'"'+(chk?' checked':'')
         +' onchange="_pagoMasivoSel[this.checked?\'add\':\'delete\'](parseInt(this.value));_pmActualizarConteo()"'
@@ -2838,12 +2856,12 @@ function buildPagoMasivo(){
 
       +'<div class="form-group" style="margin:0">'
         +'<label class="flbl">Mes que se paga *</label>'
-        +'<select id="pm-mes" style="min-width:150px">'+mesesOpts+'</select>'
+        +'<select id="pm-mes" onchange="_pmMesActual=this.value;_pmHideMode=false;renderPagoTab();">'+mesesOpts+'</select>'
       +'</div>'
 
       +'<div class="form-group" style="margin:0">'
         +'<label class="flbl">Método de pago *</label>'
-        +'<select id="pm-metodo">'+metOpts+'</select>'
+        +'<select id="pm-metodo" onchange="_pmActualizarMetodoInfo()">'+metOpts+'</select>'
       +'</div>'
 
       +'<div class="form-group" style="margin:0;flex:1;min-width:180px">'
@@ -2853,12 +2871,19 @@ function buildPagoMasivo(){
 
     +'</div>'
 
+    +'<div id="pm-mp-info" style="display:none;margin-bottom:12px">'
+      +'<div style="background:#f3f0ff;border:1px solid #c4b5fd;border-radius:8px;padding:10px 14px;font-size:12px;color:#6d28d9">'
+        +'<strong>💳 Mercado Pago Point:</strong> Se aplicará comisión de 3.50% + IVA (~4.06% efectivo) a cada pago seleccionado con este método.'
+      +'</div>'
+    +'</div>'
+
     // Acciones rápidas de selección
     +'<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">'
       +'<button class="btn-ghost btn-sm" onclick="_pmSeleccionarTodos(true)">✅ Seleccionar todos</button>'
       +'<button class="btn-ghost btn-sm" onclick="_pmSeleccionarTodos(false)">☐ Deseleccionar todos</button>'
-      +'<button class="btn-ghost btn-sm" onclick="_pmSeleccionarNoPagados()">⚡ Solo sin pago este mes</button>'
-      +'<span id="pm-conteo" style="margin-left:8px;font-size:12px;color:var(--text3)">0 seleccionados</span>'
+      +'<button class="btn-primary btn-sm" onclick="_pmSeleccionarNoPagados()">⚡ Solo sin pago este mes</button>'
+      +(_pmHideMode?'<button class="btn-ghost btn-sm" onclick="_pmMostrarTodos()">👁️ Mostrar todos de nuevo</button>':'')
+      +'<span id="pm-conteo" style="margin-left:8px;font-size:12px;color:var(--text3)">'+_pagoMasivoSel.size+' seleccionado'+(_pagoMasivoSel.size!==1?'s':'')+'</span>'
     +'</div>'
 
     // Tabla de alumnos
@@ -2881,11 +2906,16 @@ function buildPagoMasivo(){
     +'</div>';
 }
 
+function _pmActualizarMetodoInfo(){
+  var sel=document.getElementById('pm-metodo');
+  var info=document.getElementById('pm-mp-info');
+  if(info) info.style.display=(sel&&sel.value==='card')?'block':'none';
+}
+
 function _pmActualizarConteo(){
   var n=_pagoMasivoSel.size;
   var el=document.getElementById('pm-conteo');
   if(el) el.textContent=n+' seleccionado'+(n!==1?'s':'');
-  // Calcular total
   var total=0;
   _pagoMasivoSel.forEach(function(folio){
     var inp=document.getElementById('pm-monto-'+folio);
@@ -2897,6 +2927,8 @@ function _pmActualizarConteo(){
 
 function _pmSeleccionarTodos(sel){
   document.querySelectorAll('.pm-chk').forEach(function(c){
+    var row=document.getElementById('pm-row-'+c.value);
+    if(row&&row.style.display==='none') return; // no tocar filas ocultas (ya pagadas)
     c.checked=sel;
     _pagoMasivoSel[sel?'add':'delete'](parseInt(c.value));
   });
@@ -2906,24 +2938,31 @@ function _pmSeleccionarTodos(sel){
 }
 
 function _pmSeleccionarNoPagados(){
-  var mes=document.getElementById('pm-mes')?.value||monthStr();
-  document.querySelectorAll('.pm-chk').forEach(function(c){
-    var folio=parseInt(c.value);
-    var pagado=(STATE.pagosRegulares||[]).some(function(p){
-      return p.crmFolio===folio&&(p.meses||[]).includes(mes);
-    });
-    c.checked=!pagado;
-    _pagoMasivoSel[!pagado?'add':'delete'](folio);
+  // Oculta del listado a quien YA pagó el mes seleccionado y selecciona solo
+  // a quienes faltan — así se ve de inmediato quién sigue pendiente.
+  // El ocultamiento se calcula DENTRO de buildPagoMasivo() (usando _pmHideMode),
+  // así que sobrevive al re-render completo que dispara renderPagoTab().
+  _pmHideMode=true;
+  var mesSel=_pmMesActual||monthStr();
+  var pagadosSet=new Set((STATE.pagosRegulares||[]).filter(function(p){
+    return (p.meses||[]).includes(mesSel);
+  }).map(function(p){return p.crmFolio;}));
+  _pagoMasivoSel.clear();
+  STATE.matrículas.forEach(function(m){
+    if(!pagadosSet.has(m.folio)) _pagoMasivoSel.add(m.folio);
   });
-  var all=document.getElementById('pm-chk-all');
-  if(all) all.checked=false;
-  _pmActualizarConteo();
+  renderPagoTab();
+}
+
+function _pmMostrarTodos(){
+  _pmHideMode=false;
+  renderPagoTab();
 }
 
 async function guardarPagoMasivo(){
   if(!hasPerm('gestionar_pagos')){alert('Sin permiso para registrar pagos');return;}
   var mes=document.getElementById('pm-mes')?.value;
-  var metodo=document.getElementById('pm-metodo')?.value;
+  var metodo=document.getElementById('pm-metodo')?.value; // 'cash' | 'transfer' | 'card'
   var notas=(document.getElementById('pm-notas')?.value||'').trim();
   if(!mes){alert('Selecciona el mes que se está pagando.');return;}
   if(!metodo){alert('Selecciona el método de pago.');return;}
@@ -2939,13 +2978,19 @@ async function guardarPagoMasivo(){
     var monto=parseFloat(document.getElementById('pm-monto-'+folio)?.value)||0;
     if(monto<=0){omitidos.push(m.alumno+' (monto 0)');return;}
 
-    // Verificar si ya pagó este mes
     var yaPago=(STATE.pagosRegulares||[]).some(function(p){
       return p.crmFolio===folio&&(p.meses||[]).includes(mes);
     });
     if(yaPago){omitidos.push(m.alumno+' (ya pagó '+mesLabel(mes)+')');return;}
 
-    // Registrar el pago
+    // Comisión de Mercado Pago Point — solo aplica a pagos con terminal/tarjeta
+    var commMP=0, ivaMP=0, neto=monto;
+    if(metodo==='card'){
+      commMP=+(monto*0.035).toFixed(2);
+      ivaMP=+(commMP*0.16).toFixed(2);
+      neto=+(monto-commMP-ivaMP).toFixed(2);
+    }
+
     STATE.pagosRegulares.push({
       id:uid(),
       alumnoNombre:m.alumno,
@@ -2959,8 +3004,8 @@ async function guardarPagoMasivo(){
       promoId:null,promoNombre:null,
       descuentoMonto:0,
       montoFinal:monto,
-      commMP:0,ivaMP:0,
-      neto:monto,
+      commMP:commMP,ivaMP:ivaMP,
+      neto:neto,
       method:metodo,
       fecha:fmtFecha(todayISO()),
       fechaISO:todayISO(),
@@ -2973,8 +3018,10 @@ async function guardarPagoMasivo(){
 
   await saveState();
   _pagoMasivoSel.clear();
+  _pmHideMode=false;
 
   var msg='✅ '+registrados+' pago'+(registrados!==1?'s':'')+' registrado'+(registrados!==1?'s':'')+' para '+mesLabel(mes)+'.';
+  if(metodo==='card'&&registrados>0) msg+='\n\n💳 Se aplicó comisión de Mercado Pago Point a cada pago.';
   if(omitidos.length>0) msg+='\n\n⚠️ Omitidos ('+omitidos.length+'):\n'+omitidos.join('\n');
   alert(msg);
   pagoSubTab='masivo';
@@ -3607,20 +3654,25 @@ function _filtrarCursos(){
   var tabla=document.querySelector('#main-content .table-wrap table tbody');
   if(!tabla) return;
   tabla.querySelectorAll('tr').forEach(function(tr){
-    // Solo filas principales (no las de detalle expandible)
-    if(tr.classList.contains('cur-detail')) return;
+    // Las filas de detalle (cascadas) tienen id que empieza con 'cg-'.
+    // NUNCA tocarlas aquí — solo toggleGrupos() las controla. Si las tocáramos
+    // con q='' las pondríamos en display:'' (visible), abriendo todas las cascadas.
+    if(tr.id&&tr.id.indexOf('cg-')===0) return;
     var texto=tr.textContent.toLowerCase();
-    tr.style.display=(!q||texto.includes(q))?'':'none';
-    // También ocultar la fila de detalle asociada si existe
+    var visible=!q||texto.includes(q);
+    tr.style.display=visible?'':'none';
+    // Si la fila padre se oculta, también ocultar (no mostrar) su cascada asociada
     var next=tr.nextElementSibling;
-    if(next&&next.classList.contains('cur-detail')){
-      next.style.display=(!q||texto.includes(q))?'':'none';
+    if(next&&next.id&&next.id.indexOf('cg-')===0&&!visible){
+      next.style.display='none';
     }
   });
-  // Actualizar contador
+  // Actualizar contador — solo cuenta filas PRINCIPALES visibles (excluye cascadas 'cg-')
   var ph=document.querySelector('#main-content .page-header p');
   if(ph){
-    var visible=tabla.querySelectorAll('tr:not([style*="display: none"]):not(.cur-detail)').length;
+    var visible=[...tabla.querySelectorAll('tr')].filter(function(tr){
+      return !(tr.id&&tr.id.indexOf('cg-')===0) && tr.style.display!=='none';
+    }).length;
     ph.textContent=visible+' curso'+(visible!==1?'s':'')+' encontrado'+(visible!==1?'s':'')+(q?' para "'+q+'"':'');
   }
 }
@@ -3649,10 +3701,13 @@ function renderCursos(){
 
     function salonBadge(s){
       if(!s) return '';
-      var n=s==='Netflix';
-      return '<span style="background:'+(n?'rgba(229,9,20,.12)':'rgba(109,40,217,.08)')
-        +';color:'+(n?'#e50914':'#6d28d9')+';padding:2px 7px;border-radius:4px;font-size:11px">'
-        +(n?'🔴':'▶️')+' '+s+'</span>';
+      var isNetflix=s==='Netflix';
+      var isYoutube=s==='Youtube';
+      var bg=isNetflix?'rgba(0,113,235,.12)':isYoutube?'rgba(255,0,0,.12)':'rgba(109,40,217,.08)';
+      var fg=isNetflix?'#0071eb':isYoutube?'#ff0000':'#6d28d9';
+      var ico=isNetflix?'🔵':isYoutube?'🔴':'▶️';
+      return '<span style="background:'+bg+';color:'+fg+';padding:2px 7px;border-radius:4px;font-size:11px">'
+        +ico+' '+s+'</span>';
     }
 
     var salonHtml='';
@@ -3706,7 +3761,7 @@ function renderCursos(){
         var gInscritos = grupoMats.length;
 
         var tags='';
-        if(g.salon) tags+='<span style="background:'+(g.salon==='Netflix'?'rgba(229,9,20,.1)':'rgba(109,40,217,.1)')+';padding:2px 7px;border-radius:4px">'+(g.salon==='Netflix'?'🔴':g.salon==='Online'?'💻':'▶️')+' '+g.salon+'</span> ';
+        if(g.salon) tags+='<span style="background:'+(g.salon==='Netflix'?'rgba(0,113,235,.1)':g.salon==='Youtube'?'rgba(255,0,0,.1)':'rgba(109,40,217,.1)')+';padding:2px 7px;border-radius:4px">'+(g.salon==='Netflix'?'🔵':g.salon==='Youtube'?'🔴':g.salon==='Online'?'💻':'▶️')+' '+g.salon+'</span> ';
         if(g.dia) tags+='<span style="background:var(--surface2);padding:2px 7px;border-radius:4px">📅 '+g.dia+'</span> ';
         if(g.horarioDesde&&g.horarioHasta) tags+='<span style="background:var(--surface2);padding:2px 7px;border-radius:4px">⏰ '+g.horarioDesde+'–'+g.horarioHasta+'</span> ';
         if(g.nivel) tags+='<span style="background:var(--surface2);padding:2px 7px;border-radius:4px">📊 '+g.nivel+'</span> ';
@@ -3791,7 +3846,7 @@ function renderCursos(){
       }
 
       var detallesCurso = '';
-      if(c.salon) detallesCurso += '<span style="background:'+(c.salon==='Netflix'?'rgba(229,9,20,.1)':'rgba(109,40,217,.1)')+';padding:2px 8px;border-radius:4px;font-size:12px">'+(c.salon==='Netflix'?'🔴':c.salon==='Online'?'💻':'▶️')+' '+c.salon+'</span> ';
+      if(c.salon) detallesCurso += '<span style="background:'+(c.salon==='Netflix'?'rgba(0,113,235,.1)':c.salon==='Youtube'?'rgba(255,0,0,.1)':'rgba(109,40,217,.1)')+';padding:2px 8px;border-radius:4px;font-size:12px">'+(c.salon==='Netflix'?'🔵':c.salon==='Youtube'?'🔴':c.salon==='Online'?'💻':'▶️')+' '+c.salon+'</span> ';
       if(c.horarioDesde&&c.horarioHasta) detallesCurso += '<span style="background:var(--surface);padding:2px 8px;border-radius:4px;font-size:12px">⏰ '+c.horarioDesde+'–'+c.horarioHasta+'</span> ';
       if(c.nivel) detallesCurso += '<span style="background:var(--surface);padding:2px 8px;border-radius:4px;font-size:12px">📊 '+c.nivel+'</span> ';
       if(c.instructor) detallesCurso += '<span style="background:var(--surface);padding:2px 8px;border-radius:4px;font-size:12px">👤 '+c.instructor+'</span> ';
@@ -3936,8 +3991,8 @@ function renderCursoModal(c) {
     +'<div class="form-group"><label class="flbl">Salón</label>'
     +'<select id="mc-salon" onchange="checkCursoConflict()">'
     +'<option value="">— Sin salón —</option>'
-    +'<option value="Netflix"'+(c&&c.salon==='Netflix'?' selected':'')+'>🔴 Netflix</option>'
-    +'<option value="Youtube"'+(c&&c.salon==='Youtube'?' selected':'')+'>▶️ Youtube</option>'
+    +'<option value="Netflix"'+(c&&c.salon==='Netflix'?' selected':'')+'>🔵 Netflix</option>'
+    +'<option value="Youtube"'+(c&&c.salon==='Youtube'?' selected':'')+'>🔴 Youtube</option>'
     +'<option value="Online"'+(c&&c.salon==='Online'?' selected':'')+'>💻 On line</option>'
     +'</select></div>'
 
@@ -3960,7 +4015,7 @@ function renderCursoModal(c) {
     +'<div style="margin-top:18px;border-top:1px solid var(--border);padding-top:18px">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
     +'<div><div style="font-weight:700;font-size:14px">'+t('cur_grupos')+'</div>'
-    +'<div style="font-size:12px;color:var(--text3);margin-top:2px">'+t('cur_grupo_sin')+'</div></div>'
+    +'<div style="font-size:12px;color:var(--text3);margin-top:2px">'+(_modalGrupos.length>0?(_modalGrupos.length+' grupo'+(_modalGrupos.length!==1?'s':'')+' configurado'+(_modalGrupos.length!==1?'s':'')):t('cur_grupo_sin'))+'</div></div>'
     +'<div style="display:flex;gap:6px">'
     +'<button class="btn-primary btn-sm" onclick="addModalGrupo()"><i class="ti ti-plus"></i> '+t('cur_nuevo_grupo')+'</button>'
     +(cursosParaGrupo.length>0?'<button class="btn-ghost btn-sm" onclick="toggleCursoComoGrupoPanel()"><i class="ti ti-arrows-transfer-up"></i> Usar curso existente</button>':'')
@@ -4038,8 +4093,8 @@ function renderGrupoRow(g, idx) {
     +'<div class="form-group"><label class="flbl">'+t('mat_campo_salon')+'</label>'
     +'<select id="gsal-'+idx+'" onchange="updateGrupoConflict('+idx+',\'salon\',this.value)">'
     +'<option value="">'+t('cur_salon_none')+'</option>'
-    +'<option value="Netflix"'+(g.salon==='Netflix'?' selected':'')+'>🔴 Netflix</option>'
-    +'<option value="Youtube"'+(g.salon==='Youtube'?' selected':'')+'>▶️ Youtube</option>'
+    +'<option value="Netflix"'+(g.salon==='Netflix'?' selected':'')+'>🔵 Netflix</option>'
+    +'<option value="Youtube"'+(g.salon==='Youtube'?' selected':'')+'>🔴 Youtube</option>'
     +'<option value="Online"'+(g.salon==='Online'?' selected':'')+'>💻 On line</option>'
     +'</select></div>'
 
@@ -4119,10 +4174,12 @@ function updateGrupoConflict(idx, field, val) {
   const g = _modalGrupos[idx];
   const nombreOriginal = document.getElementById('mc-nombre')?.value?.trim()||'';
   const c = STATE.cursos.find(x=>x.nombre===nombreOriginal);
+  // Excluir el curso padre Y el curso original si este grupo viene de un curso existente
+  const excludeIds = [c?.id||null, g._originalCursoId||null];
   const conflict = checkScheduleConflict(
     g.salon, g.horarioDesde, g.horarioHasta,
     g.fechaInicio, g.fechaFin,
-    c?.id||null, g.id||null, g.dia
+    excludeIds, g.id||null, g.dia
   );
   const alertEl = document.getElementById('conflict-'+idx);
   if(alertEl){
@@ -4237,8 +4294,10 @@ async function guardarCursoModal(nombreOriginal) {
       const g=_modalGrupos[i];
       if(!g.salon||!g.horarioDesde||!g.horarioHasta) continue;
       const c=STATE.cursos.find(x=>x.nombre===nombreOriginal);
+      // Excluir el curso padre Y el curso original (si este grupo viene de un curso existente)
+      const excludeIds=[c?.id||null, g._originalCursoId||null];
       const conflict=checkScheduleConflict(g.salon,g.horarioDesde,g.horarioHasta,
-        g.fechaInicio||inicio,g.fechaFin||fin,c?.id||null,g.id||null,g.dia||dia);
+        g.fechaInicio||inicio,g.fechaFin||fin,excludeIds,g.id||null,g.dia||dia);
       if(conflict){
         alert(t('cur_grupo_conflicto')+'\nConflicto con: '+conflict);
         return;
@@ -6087,9 +6146,16 @@ function toggleGrupos(id){
   const row=document.getElementById(id);
   const ico=document.getElementById('ico-'+id);
   if(!row) return;
-  const open=row.style.display==='none'||row.style.display==='';
-  row.style.display=open?'table-row':'none';
-  if(ico) ico.style.transform=open?'rotate(90deg)':'rotate(0deg)';
+  // Sólo 'none' significa cerrado — '' o 'table-row' significa abierto
+  const isOpen=row.style.display!==''&&row.style.display!=='none';
+  const shouldOpen=row.style.display==='none';
+  if(shouldOpen){
+    row.style.display='table-row';
+    if(ico) ico.style.transform='rotate(90deg)';
+  } else {
+    row.style.display='none';
+    if(ico) ico.style.transform='rotate(0deg)';
+  }
 }
 
 
@@ -6346,7 +6412,7 @@ function renderMultiGruposPanel(curso){
 
   var gruposHtml = curso.grupos.map(function(g){
     var tags='';
-    if(g.salon) tags+=' · '+(g.salon==='Netflix'?'🔴':g.salon==='Online'?'💻':'▶️')+' '+g.salon;
+    if(g.salon) tags+=' · '+(g.salon==='Netflix'?'🔵':g.salon==='Youtube'?'🔴':g.salon==='Online'?'💻':'▶️')+' '+g.salon;
     if(g.dia) tags+=' · 📅 '+g.dia;
     if(g.horarioDesde&&g.horarioHasta) tags+=' · ⏰ '+g.horarioDesde+'–'+g.horarioHasta;
     if(g.fechaInicio) tags+=' · 🗓 '+g.fechaInicio+(g.fechaFin?' → '+g.fechaFin:'');
@@ -6516,7 +6582,24 @@ async function guardarMatriculasMultiples(){
 
   var gruposSelIds=[...document.querySelectorAll('.f-grupo-chk:checked')].map(function(c){return c.value;});
   if(gruposSelIds.length===0){
-    mostrarHintCampo('f-curso','Selecciona al menos un grupo para inscribir');
+    var cont=document.getElementById('f-multi-grupos-cont');
+    if(cont){
+      // Aviso visible directamente sobre los checkboxes de grupo (no arriba en Curso)
+      var aviso=cont.querySelector('.grupo-aviso-err');
+      if(!aviso){
+        aviso=document.createElement('div');
+        aviso.className='grupo-aviso-err';
+        aviso.style.cssText='color:#dc2626;font-size:12px;font-weight:700;margin-bottom:8px;padding:8px 10px;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px';
+        cont.insertBefore(aviso, cont.firstChild);
+      }
+      aviso.textContent='⚠ Marca al menos un grupo de la lista para poder inscribir al alumno.';
+      cont.style.outline='2px solid #dc2626';
+      cont.style.outlineOffset='3px';
+      cont.scrollIntoView({behavior:'smooth', block:'center'});
+      setTimeout(function(){cont.style.outline='';}, 2500);
+    } else {
+      mostrarHintCampo('f-curso','Selecciona al menos un grupo para inscribir');
+    }
     return;
   }
 
@@ -6721,7 +6804,7 @@ function renderTarjetaResumen(t){
   var info=[];
   if(g.dia) info.push('📅 '+esc(g.dia));
   if(g.horarioDesde&&g.horarioHasta) info.push('⏰ '+g.horarioDesde+'–'+g.horarioHasta);
-  if(g.salon) info.push((g.salon==='Netflix'?'🔴':g.salon==='Online'?'💻':'▶️')+' '+esc(g.salon));
+  if(g.salon) info.push((g.salon==='Netflix'?'🔵':g.salon==='Youtube'?'🔴':g.salon==='Online'?'💻':'▶️')+' '+esc(g.salon));
   var roles=[];
   if(t.esP) roles.push('Principal');
   if(t.esA) roles.push('Asistente');
@@ -6745,7 +6828,7 @@ function renderTarjetaHorario(t){
   var anyExiste = !!(s&&(s.estadoP||s.estadoA));
 
   var info=[];
-  if(g.salon) info.push((g.salon==='Netflix'?'🔴':g.salon==='Online'?'💻':'▶️')+' '+esc(g.salon));
+  if(g.salon) info.push((g.salon==='Netflix'?'🔵':g.salon==='Youtube'?'🔴':g.salon==='Online'?'💻':'▶️')+' '+esc(g.salon));
   if(g.horarioDesde&&g.horarioHasta) info.push('⏰ '+g.horarioDesde+'–'+g.horarioHasta);
   if(g.dia) info.push('📅 '+esc(g.dia));
 
@@ -7086,7 +7169,7 @@ function renderTarjetaResumenAdmin(t){
   var info=[];
   if(g.dia||c.dia) info.push('📅 '+(g.dia||c.dia));
   if(g.horarioDesde&&g.horarioHasta) info.push('⏰ '+g.horarioDesde+'–'+g.horarioHasta);
-  if(g.salon||c.salon){var s=g.salon||c.salon;info.push((s==='Netflix'?'🔴':s==='Online'?'💻':'▶️')+' '+esc(s));}
+  if(g.salon||c.salon){var s=g.salon||c.salon;info.push((s==='Netflix'?'🔵':s==='Youtube'?'🔴':s==='Online'?'💻':'▶️')+' '+esc(s));}
   return '<div class="fade-in" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;'
     +'padding:10px 14px;margin-bottom:8px;opacity:.85;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'
     +'<div><strong style="font-size:13px">'+esc(cursoGrupoLabel(c.nombre,g.nombre))+'</strong>'
@@ -7107,7 +7190,7 @@ function renderTarjetaHorarioAdmin(t){
   var anyIniciada=!!(s&&(s.estadoP==='iniciada'||s.estadoA==='iniciada'));
   var anyExiste=!!(s&&(s.estadoP||s.estadoA));
   var info=[];
-  if(g.salon||c.salon){var sl=g.salon||c.salon;info.push((sl==='Netflix'?'🔴':sl==='Online'?'💻':'▶️')+' '+esc(sl));}
+  if(g.salon||c.salon){var sl=g.salon||c.salon;info.push((sl==='Netflix'?'🔵':sl==='Youtube'?'🔴':sl==='Online'?'💻':'▶️')+' '+esc(sl));}
   if(g.horarioDesde&&g.horarioHasta) info.push('⏰ '+g.horarioDesde+'–'+g.horarioHasta);
 
   var html='<div class="fade-in" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px">';
@@ -7914,7 +7997,7 @@ function renderPanelInstructor(){
       + '<div style="font-weight:700;font-size:15px">'+m.nombre+'</div>'
       + '<div style="font-size:12px;color:var(--text2);margin-top:2px">'+x.cursoNombre+(x.grupoNombre&&x.grupoNombre!==x.cursoNombre?' — '+x.grupoNombre:'')+'</div>'
       + '<div style="font-size:11px;color:var(--text3);margin-top:2px">'
-      + (x.salon?'<span style="margin-right:8px">'+(x.salon==='Netflix'?'🔴':x.salon==='Online'?'💻':'▶️')+' '+x.salon+'</span>':'')
+      + (x.salon?'<span style="margin-right:8px">'+(x.salon==='Netflix'?'🔵':x.salon==='Youtube'?'🔴':x.salon==='Online'?'💻':'▶️')+' '+x.salon+'</span>':'')
       + (x.horarioDesde?'<span>⏰ '+x.horarioDesde+'–'+x.horarioHasta+'</span>':'')
       + '</div></div>'
       + estadoBadge+'</div>'
