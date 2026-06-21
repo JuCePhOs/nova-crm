@@ -1248,8 +1248,8 @@ function buildSidebar(){
 }
 function pendingPayments(){
   const cm=monthStr();
-  const pagados=new Set(STATE.pagosRegulares.filter(p=>p.meses&&p.meses.includes(cm)).map(p=>p.alumnoNombre));
-  return STATE.matrículas.filter(m=>!pagados.has(m.alumno)).length||0;
+  const pagados=new Set(STATE.pagosRegulares.filter(p=>p.meses&&p.meses.includes(cm)).map(p=>p.crmFolio)); // FIX: por folio
+  return STATE.matrículas.filter(m=>!pagados.has(m.folio)).length||0;
 }
 const VIEWS={dashboard:renderDashboard,matriculas:renderMatriculas,pagos:renderPagos,alumnos:renderAlumnos,cursos:renderCursos,usuarios:renderUsuarios,proyeccion:renderProyeccion,inactivos:renderInactivos,dios:renderModoDios,maestros:renderMaestros,clases:renderClasesInstructor,cursos_inst:renderCursosInstructor,horarios:renderHorarios,horarios_admin:renderHorariosAdmin,asistencias_admin:renderAsistenciasAdmin};
 function navigate(tab){
@@ -3598,7 +3598,7 @@ function _renderAlumnosCards(){
   todos.forEach(function(m){if(!seen[m.alumno]){seen[m.alumno]=true;alumnos.push(m);}});
   var pagados=new Set((STATE.pagosRegulares||[]).filter(function(p){
     return (p.meses&&p.meses.includes(cm))||(p.fechaISO&&p.fechaISO.startsWith(cm));
-  }).map(function(p){return p.alumnoNombre;}));
+  }).map(function(p){return p.crmFolio;})); // FIX: por folio, no por nombre
   if(q) alumnos=alumnos.filter(function(m){
     return m.alumno.toLowerCase().includes(q)
       ||(m.titular||'').toLowerCase().includes(q)
@@ -3612,7 +3612,7 @@ function _renderAlumnosCards(){
   el.innerHTML='<div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">'
     +alumnos.map(function(m){
       var cursosCount=STATE.matrículas.filter(function(x){return x.alumno===m.alumno;}).length;
-      var pago=pagados.has(m.alumno);
+      var pago=pagados.has(m.folio); // FIX: por folio, no por nombre
       var ini=m.alumno.charAt(0).toUpperCase();
       return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;align-items:center;gap:14px">'
         +'<div style="width:46px;height:46px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;flex-shrink:0">'+ini+'</div>'
@@ -4183,7 +4183,7 @@ function updateGrupoConflict(idx, field, val) {
   const c = STATE.cursos.find(x=>x.nombre===nombreOriginal);
   // Excluir el curso padre Y el curso original si este grupo viene de un curso existente
   const excludeIds = [c?.id||null, g._originalCursoId||null];
-  const excludeNombres = g._fromCurso ? [g.nombre] : [];
+  const excludeNombres = g.nombre ? [g.nombre] : [];
   const conflict = checkScheduleConflict(
     g.salon, g.horarioDesde, g.horarioHasta,
     g.fechaInicio, g.fechaFin,
@@ -4348,7 +4348,10 @@ async function guardarCursoModal(nombreOriginal) {
       const c=STATE.cursos.find(x=>x.nombre===nombreOriginal);
       // Excluir el curso padre Y el curso original (si este grupo viene de un curso existente)
       const excludeIds=[c?.id||null, g._originalCursoId||null];
-      const excludeNombres = g._fromCurso ? [g.nombre] : [];
+      // Exclusión por nombre INCONDICIONAL (no solo si _fromCurso=true): cubre grupos
+      // huérfanos de un intento previo que coincide en nombre con un curso existente pero
+      // que por alguna razón quedó sin la marca _fromCurso/_originalCursoId.
+      const excludeNombres = g.nombre ? [g.nombre] : [];
       const conflict=checkScheduleConflict(g.salon,g.horarioDesde,g.horarioHasta,
         g.fechaInicio||inicio,g.fechaFin||fin,excludeIds,g.id||null,g.dia||dia,excludeNombres);
       if(conflict){
@@ -4386,11 +4389,20 @@ async function guardarCursoModal(nombreOriginal) {
     // quedó desincronizado (p.ej. por una resincronización de Firebase mientras el modal
     // estaba abierto), se busca también por nombre exacto del curso original — los nombres
     // de curso son únicos en el sistema, así que es una clave de respaldo segura.
-    const convertedIds = _modalGrupos.filter(g=>g._fromCurso).map(g=>g._originalCursoId||g.id);
-    const convertedNombres = _modalGrupos.filter(g=>g._fromCurso).map(g=>g.nombre).filter(Boolean);
+    // AUTOSANACIÓN: un grupo se trata como "convertido desde curso existente" si tiene
+    // la marca _fromCurso O si su nombre coincide con un curso standalone que sigue
+    // existiendo (cubre grupos huérfanos de un intento previo que quedó sin la marca).
+    const esConvertido = function(g){
+      if(g._fromCurso) return true;
+      return STATE.cursos.some(function(c){ return c.nombre!==parentNombreCheck && c.nombre===g.nombre; });
+    };
+    var parentNombreCheck = nombre;
+    const gruposConvertidos = _modalGrupos.filter(esConvertido);
+    const convertedIds = gruposConvertidos.map(g=>g._originalCursoId||g.id);
+    const convertedNombres = gruposConvertidos.map(g=>g.nombre).filter(Boolean);
     const parentNombre = nombre; // the new parent course name
   
-    _modalGrupos.filter(g=>g._fromCurso).forEach(function(g){
+    gruposConvertidos.forEach(function(g){
       const originalCurso = STATE.cursos.find(c=>c.id===(g._originalCursoId||g.id))
                           || STATE.cursos.find(c=>c.nombre===g.nombre); // respaldo por nombre
       if(!originalCurso) return;
