@@ -4252,7 +4252,15 @@ async function removeModalGrupo(idx) {
   const g = _modalGrupos[idx];
   if(!g) return;
 
-  if(g._fromCurso || g._originalCursoId) {
+  // FIX: un grupo se trata como "viene de un curso existente" si tiene la marca
+  // _fromCurso/_originalCursoId O si hay matrículas/pagos que todavía referencian
+  // su nombre como curso — esto cubre grupos huérfanos (de un intento previo que
+  // quedó sin la marca) para que NUNCA se borren de forma permanente sin avisar,
+  // ya que podrían representar alumnos reales inscritos.
+  const tieneDatosReferenciados = (STATE.matrículas||[]).some(function(m){return m.curso===g.nombre;})
+    || (STATE.pagosRegulares||[]).some(function(p){return p.curso===g.nombre;});
+
+  if(g._fromCurso || g._originalCursoId || tieneDatosReferenciados) {
     // ── Grupo creado DESDE UN CURSO EXISTENTE → restaurar como curso independiente
     const ok = confirm(
       '⚠️ "' + g.nombre + '" fue agregado desde un curso existente.\n\n' +
@@ -4262,11 +4270,13 @@ async function removeModalGrupo(idx) {
     );
     if(!ok) return;
 
-    // Restaurar el curso solo si no existe ya un curso con ese ID
+    // Restaurar el curso solo si no existe ya un curso con ese ID O con ese NOMBRE
+    // (antes solo se revisaba por ID, lo que permitía crear un curso standalone
+    // DUPLICADO si ya existía uno con el mismo nombre pero distinto id)
     const existePorId = STATE.cursos.find(c => c.id === (g._originalCursoId || g.id));
-    const existePorNombre = STATE.cursos.find(c => c.nombre === g.nombre && c.grupos && c.grupos.length === 0);
+    const existePorNombre = STATE.cursos.find(c => c.nombre === g.nombre);
 
-    if(!existePorId) {
+    if(!existePorId && !existePorNombre) {
       // Reconstruir el curso desde los datos del grupo
       const cursoRestaurado = {
         id:    g._originalCursoId || g.id || uid(),
@@ -4287,6 +4297,8 @@ async function removeModalGrupo(idx) {
         restoradoDeGrupo: true,
       };
       STATE.cursos.push(cursoRestaurado);
+      // Reasignar matrículas/pagos huérfanos de vuelta a este curso restaurado
+      (STATE.matrículas||[]).forEach(function(m){ if(m.curso===g.nombre) m.grupoId=null; });
       await saveState();
       alert('✅ "' + g.nombre + '" restaurado como curso independiente.\nPuedes encontrarlo en la pestaña Cursos.');
     } else {
@@ -4294,11 +4306,13 @@ async function removeModalGrupo(idx) {
     }
 
   } else {
-    // ── Grupo creado MANUALMENTE (nuevo grupo) → eliminar definitivamente
+    // ── Grupo creado MANUALMENTE (nuevo grupo, sin matrículas/pagos asociados) →
+    //    eliminar definitivamente. Solo se llega aquí si de verdad no hay ningún
+    //    dato (alumno o pago) que dependa de este grupo.
     const ok = confirm(
       '🗑️ ¿Eliminar el grupo "' + g.nombre + '" definitivamente?\n\n' +
-      'Este grupo fue creado como grupo nuevo dentro de este curso. ' +
-      'Al eliminarlo se perderá toda su configuración.\n\n' +
+      'Este grupo fue creado como grupo nuevo dentro de este curso y no tiene ' +
+      'alumnos ni pagos asociados. Al eliminarlo se perderá toda su configuración.\n\n' +
       'Esta acción NO se puede deshacer.'
     );
     if(!ok) return;
@@ -6126,6 +6140,16 @@ function agregarCursoComoGrupo(){
   if(!nombre) return;
   const c=STATE.cursos.find(x=>x.nombre===nombre);
   if(!c) return;
+  // FIX: evitar agregar un grupo duplicado si YA existe un grupo con ese nombre
+  // en _modalGrupos (p.ej. si el usuario hace doble clic, o lo intenta de nuevo
+  // tras un guardado que pareció fallar). Esto es lo que causaba que un curso
+  // existente terminara duplicado como 2 grupos hermanos dentro del mismo curso.
+  const yaExiste=_modalGrupos.some(function(gr){return (gr.nombre||'').trim().toLowerCase()===nombre.trim().toLowerCase();});
+  if(yaExiste){
+    alert('ℹ️ "'+nombre+'" ya está agregado como grupo. No se puede agregar dos veces.');
+    document.getElementById('curso-como-grupo-panel').style.display='none';
+    return;
+  }
   // Convert course to group
   _modalGrupos.push({
     id:uid(),              // new ID for the grupo
