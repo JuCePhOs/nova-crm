@@ -1147,17 +1147,29 @@ async function loadState(){
   if(!STATE.pagosGastosMaestros)STATE.pagosGastosMaestros=[];
   if(!STATE.asistencias)STATE.asistencias=[];
   if(STATE.tarifaAsistente===undefined)STATE.tarifaAsistente=60;
-  // AUTO-RECOVERY: rebuild missing courses from matrículas references
+  // AUTO-RECOVERY: rebuild missing courses from matrículas references.
+  // Usa el archivo de cursosEliminados para restaurar con TODOS los datos
+  // originales (horario, costo, salón, etc.) cuando esté disponible; si no,
+  // recupera al menos el nombre para no romper las referencias de matrículas/pagos.
   (()=>{
     const existingNames=new Set((STATE.cursos||[]).map(c=>c.nombre).filter(Boolean));
     const missing=new Set();
     (STATE.matrículas||[]).forEach(m=>{ if(m.curso&&!existingNames.has(m.curso)) missing.add(m.curso); });
     (STATE.pagosRegulares||[]).forEach(p=>{ if(p.curso&&!existingNames.has(p.curso)) missing.add(p.curso); });
     if(missing.size>0){
+      const archivados=STATE.cursosEliminados||[];
       missing.forEach(nombre=>{
-        STATE.cursos.push({id:uid(),nombre,costoBase:'',tipo:'regular',
-          fechaInicio:null,fechaFin:null,grupos:[],
-          createdAt:new Date().toISOString(),_recovered:true});
+        let archivado=null;
+        for(let i=archivados.length-1;i>=0;i--){ if(archivados[i].nombre===nombre){ archivado=archivados[i]; break; } }
+        if(archivado){
+          const {_eliminadoAt,_eliminadoPor,_fromGrupo,...datos}=archivado;
+          STATE.cursos.push({...datos, id:datos.id||uid(), grupos:datos.grupos||[],
+            _recovered:true, _recoveredAt:new Date().toISOString(), _recoveredConDatos:true});
+        } else {
+          STATE.cursos.push({id:uid(),nombre,costoBase:'',tipo:'regular',
+            fechaInicio:null,fechaFin:null,grupos:[],
+            createdAt:new Date().toISOString(),_recovered:true});
+        }
       });
       console.warn('Auto-recuperados cursos faltantes:',[...missing]);
     }
@@ -2182,7 +2194,7 @@ function getSchedulePagos(m, maxMeses){
   if(m.pagoTipo==='unico') maxMeses=1; // pago único: solo 1 fecha
   if(maxMeses==null) maxMeses=6; // null/undefined → 6 por defecto (0 es un valor válido explícito, no se sobreescribe)
   var pagados=(STATE.pagosRegulares||[])
-    .filter(function(p){return p.crmFolio==m.folio||(p.paqueteFolios&&p.paqueteFolios.indexOf(m.folio)>=0);})
+    .filter(function(p){return Number(p.crmFolio)===Number(m.folio)||(p.paqueteFolios&&p.paqueteFolios.indexOf(m.folio)>=0);})
     .reduce(function(s,p){(p.meses||[]).forEach(function(mes){s[mes]=true;});return s;},{});
   var result=[];
   var startD=new Date(m.fechaISO+'T00:00:00');
@@ -2747,14 +2759,17 @@ function renderPagos(){
   const alumnosPagados=new Set(pagosMes.map(p=>p.crmFolio)).size; // FIX: por folio
   const pending=STATE.matrículas.filter(m=>!pagosMes.some(p=>p.crmFolio===m.folio)).length; // FIX: por folio, no por nombre
   document.getElementById('main-content').innerHTML=`
-  <div class="page-header fade-in">
-    <h2>Pagos Regulares</h2>
-    <p>${t('pag_subtitulo')} — ${new Date().toLocaleDateString('es-MX',{month:'long',year:'numeric'})}</p>
+  <div class="page-header fade-in" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px">
+    <div>
+      <h2>Pagos Regulares</h2>
+      <p>${t('pag_subtitulo')} — ${new Date().toLocaleDateString('es-MX',{month:'long',year:'numeric'})}</p>
+    </div>
+    ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="diagnosticoPagos()" title="Audita todas las matrículas en busca de inconsistencias"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</button>':''}
   </div>
   <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
     <div class="stat-card" style="--stripe:var(--green)"><div class="stat-label">Contratos al corriente</div><div class="stat-val">${STATE.matrículas.length-pending}</div><div class="stat-sub">de ${STATE.matrículas.length} alumnos</div></div>
     <div class="stat-card" style="--stripe:var(--danger)"><div class="stat-label">${t('pag_pendientes_stat')}</div><div class="stat-val">${pending}</div><div class="stat-sub">${t('pag_sin_pago')}</div></div>
-    <div class="stat-card" style="--stripe:#6366f1"><div class="stat-label">${t('pag_ingresos')}</div><div class="stat-val" style="font-size:18px">${fmtMXN(pagosMes.reduce((s,p)=>s+(p.montoFinal||0),0))}</div><div class="stat-sub">${pagosMes.length}</div></div>
+    <div class="stat-card" style="--stripe:#6366f1"><div class="stat-label">${t('pag_ingresos')}</div><div class="stat-val" style="font-size:18px">${fmtMXN(pagosMes.reduce((s,p)=>s+(p.montoFinal||0),0))}</div><div class="stat-sub">${pagosMes.length} pago${pagosMes.length===1?'':'s'} registrado${pagosMes.length===1?'':'s'}</div></div>
     <div class="stat-card" style="--stripe:var(--warn)"><div class="stat-label">${t('pag_promos')}</div><div class="stat-val">${STATE.promociones.filter(p=>p.activa&&p.fechaFin>=cm).length}</div><div class="stat-sub">disponibles para aplicar</div></div>
   </div>
   <div class="tab-nav">
@@ -3593,12 +3608,26 @@ function _renderAlumnosCards(){
   var q=(_alumnosQ||'').toLowerCase();
   var cm=monthStr();
   var seen={};
-  var todos=STATE.matrículas.slice().sort(function(a,b){return (a.alumno||'').localeCompare(b.alumno||'');});
+  var todos=(STATE.matrículas||[]).slice().sort(function(a,b){return (a.alumno||'').localeCompare(b.alumno||'');});
   var alumnos=[];
   todos.forEach(function(m){if(!seen[m.alumno]){seen[m.alumno]=true;alumnos.push(m);}});
   var pagados=new Set((STATE.pagosRegulares||[]).filter(function(p){
     return (p.meses&&p.meses.includes(cm))||(p.fechaISO&&p.fechaISO.startsWith(cm));
   }).map(function(p){return p.crmFolio;})); // FIX: por folio, no por nombre
+  // FIX: un alumno puede tener VARIAS matrículas (varios cursos, o una reinscripción con
+  // folio nuevo). Antes solo se revisaba el pago de LA PRIMERA matrícula encontrada (la
+  // que sobrevive la deduplicación por nombre), ignorando las demás — por eso una tarjeta
+  // podía decir "Pendiente" aunque el alumno sí hubiera pagado, simplemente porque el pago
+  // quedó registrado bajo OTRO folio suyo. Ahora se revisan TODAS sus matrículas: si
+  // cualquiera de ellas sigue sin cubrirse, la tarjeta marca "Pendiente"; si están todas
+  // cubiertas (pago este mes, o liquidadas si son de pago único), marca "Pagó".
+  var folioTieneAlgunPago=new Set((STATE.pagosRegulares||[]).map(function(p){return p.crmFolio;}));
+  function matriculaCubierta(x){
+    if(x.pagoTipo==='unico'){
+      return folioTieneAlgunPago.has(x.folio) || (!x.autorizacionPendiente && (x.primerPago||0)>0);
+    }
+    return pagados.has(x.folio);
+  }
   if(q) alumnos=alumnos.filter(function(m){
     return m.alumno.toLowerCase().includes(q)
       ||(m.titular||'').toLowerCase().includes(q)
@@ -3611,8 +3640,9 @@ function _renderAlumnosCards(){
   }
   el.innerHTML='<div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">'
     +alumnos.map(function(m){
-      var cursosCount=STATE.matrículas.filter(function(x){return x.alumno===m.alumno;}).length;
-      var pago=pagados.has(m.folio); // FIX: por folio, no por nombre
+      var misMatriculas=STATE.matrículas.filter(function(x){return x.alumno===m.alumno;});
+      var cursosCount=misMatriculas.length;
+      var pago=misMatriculas.every(matriculaCubierta); // FIX: TODAS sus matrículas, no solo una
       var ini=m.alumno.charAt(0).toUpperCase();
       return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;align-items:center;gap:14px">'
         +'<div style="width:46px;height:46px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;flex-shrink:0">'+ini+'</div>'
@@ -4316,6 +4346,11 @@ async function removeModalGrupo(idx) {
       'Esta acción NO se puede deshacer.'
     );
     if(!ok) return;
+    // Archivar de todas formas (con todos sus datos) por si acaso — recuperar
+    // de más nunca duplica nada, ya que confirmarRecuperacion() solo restaura
+    // cursos que ya no existen.
+    if(!STATE.cursosEliminados) STATE.cursosEliminados=[];
+    STATE.cursosEliminados.push({...g, _eliminadoAt:new Date().toISOString(), _eliminadoPor:currentUser?currentUser.username:'', _fromGrupo:true});
   }
 
   // Quitar del array y actualizar display
@@ -4478,10 +4513,17 @@ async function guardarCursoModal(nombreOriginal) {
 // OLD guardarCurso removed
 
 async function eliminarCurso(nombre){
-  const inscritos=STATE.matrículas.filter(m=>m.curso===nombre).length;
+  const inscritos=(STATE.matrículas||[]).filter(m=>m.curso===nombre).length;
   if(inscritos>0&&!confirm(`Este curso tiene ${inscritos} alumno(s) inscrito(s).\n¿Eliminar de todas formas?`))return;
   else if(inscritos===0&&!confirm(`¿Eliminar el curso "${nombre}"?`))return;
-  STATE.cursos=STATE.cursos.filter(c=>c.nombre!==nombre);
+  // Archivar el curso COMPLETO antes de borrarlo, para poder recuperarlo con todos
+  // sus datos (horario, costo, salón, instructor, etc.) más adelante, no solo el nombre.
+  const cursoActual = (STATE.cursos||[]).find(c=>c.nombre===nombre);
+  if(cursoActual){
+    if(!STATE.cursosEliminados) STATE.cursosEliminados=[];
+    STATE.cursosEliminados.push({...cursoActual, _eliminadoAt:new Date().toISOString(), _eliminadoPor:currentUser?currentUser.username:''});
+  }
+  STATE.cursos=(STATE.cursos||[]).filter(c=>c.nombre!==nombre);
   await saveState();renderCursos();
 }
 
@@ -6174,35 +6216,42 @@ function agregarCursoComoGrupo(){
 
 async function recuperarCursos(){
   if(!hasPerm('modo_dios')){ alert('Solo el Modo Dios puede usar esta función.'); return; }
-  const existingNames=new Set(STATE.cursos.map(c=>c.nombre).filter(Boolean));
+  const existingNames=new Set((STATE.cursos||[]).map(c=>c.nombre).filter(Boolean));
   const missing=new Set();
-  STATE.matrículas.forEach(m=>{ if(m.curso&&!existingNames.has(m.curso)) missing.add(m.curso); });
-  STATE.pagosRegulares.forEach(p=>{ if(p.curso&&!existingNames.has(p.curso)) missing.add(p.curso); });
+  (STATE.matrículas||[]).forEach(m=>{ if(m.curso&&!existingNames.has(m.curso)) missing.add(m.curso); });
+  (STATE.pagosRegulares||[]).forEach(p=>{ if(p.curso&&!existingNames.has(p.curso)) missing.add(p.curso); });
   if(missing.size===0){ alert('✅ No hay cursos faltantes. Todos los cursos de las matrículas ya existen.'); return; }
   const lista=[...missing].sort();
+  const archivados = STATE.cursosEliminados||[];
+  // Para cada nombre, buscamos la versión archivada MÁS RECIENTE (si existe) —
+  // así sabemos de antemano si la recuperación traerá todos los datos o solo el nombre.
+  const archivoPorNombre = {};
+  archivados.forEach(c=>{ archivoPorNombre[c.nombre]=c; }); // el último sobrescribe (más reciente)
   document.getElementById('modal-container').innerHTML=`
   <div class="moverlay">
-  <div class="modal" style="max-width:500px">
+  <div class="modal" style="max-width:540px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-restore"></i> Recuperar cursos borrados</div>
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-body">
-      <div style="background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;color:#92600a">
-        ⚠️ Los cursos recuperados no tendrán horario, costo ni fechas — solo el nombre. Éditalos después para completar la información.
-      </div>
-      <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px">Selecciona los cursos a recuperar:</div>
-      <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);margin-bottom:6px;cursor:pointer;font-weight:600">
-        <input type="checkbox" id="rec-all" onchange="document.querySelectorAll('.rec-chk').forEach(c=>c.checked=this.checked)" checked>
-        Seleccionar todos (${lista.length})
+      <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);cursor:pointer;margin-bottom:10px;font-weight:600;font-size:13px">
+        <div style="flex:1">Seleccionar todos (${lista.length})</div>
+        <input type="checkbox" id="rec-all" onchange="document.querySelectorAll('.rec-chk').forEach(c=>c.checked=this.checked)" checked style="flex-shrink:0;width:16px;height:16px">
       </label>
-      <div style="max-height:240px;overflow-y:auto">
-        ${lista.map(nombre=>`
-        <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;cursor:pointer;font-size:13px" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''" style="text-align:left;width:100%;box-sizing:border-box">
-          <input type="checkbox" class="rec-chk" value="${nombre}" checked>
-          <span>📚 ${nombre}</span>
-          <span style="margin-left:auto;font-size:11px;color:var(--text3)">${STATE.matrículas.filter(m=>m.curso===nombre).length} alumno(s)</span>
-        </label>`).join('')}
+      <div style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto">
+        ${lista.map(nombre=>{
+          const arch=archivoPorNombre[nombre];
+          const nAlumnos=STATE.matrículas.filter(m=>m.curso===nombre).length;
+          return `
+          <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);cursor:pointer" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:13px">📚 ${nombre}</div>
+              <div style="font-size:11px;color:var(--text3);margin-top:2px">${nAlumnos} alumno(s) · ${arch?'<span style="color:var(--green)">✓ datos completos disponibles</span>':'<span style="color:var(--warn)">⚠️ solo el nombre (sin respaldo de horario/costo)</span>'}</div>
+            </div>
+            <input type="checkbox" class="rec-chk" value="${esc(nombre)}" checked style="flex-shrink:0;width:16px;height:16px">
+          </label>`;
+        }).join('')}
       </div>
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -6215,17 +6264,152 @@ async function recuperarCursos(){
 async function confirmarRecuperacion(){
   const seleccionados=[...document.querySelectorAll('.rec-chk:checked')].map(cb=>cb.value);
   if(seleccionados.length===0){ alert('Selecciona al menos un curso.'); return; }
+  const archivados = STATE.cursosEliminados||[];
+  let conDatos=0, soloNombre=0;
   seleccionados.forEach(nombre=>{
-    if(!STATE.cursos.find(c=>c.nombre===nombre)){
+    if(STATE.cursos.find(c=>c.nombre===nombre)) return; // ya existe, no duplicar
+    // Buscamos la versión archivada MÁS RECIENTE con ese nombre (recorremos desde
+    // el final ya que cursosEliminados se agrega cronológicamente).
+    let archivado=null;
+    for(let i=archivados.length-1;i>=0;i--){ if(archivados[i].nombre===nombre){ archivado=archivados[i]; break; } }
+    if(archivado){
+      const {_eliminadoAt,_eliminadoPor,_fromGrupo,...datos}=archivado;
+      STATE.cursos.push({...datos, id:datos.id||uid(), grupos:datos.grupos||[],
+        _recovered:true, _recoveredAt:new Date().toISOString(), _recoveredConDatos:true});
+      conDatos++;
+    } else {
       STATE.cursos.push({id:uid(),nombre,costoBase:'',tipo:'regular',
         fechaInicio:null,fechaFin:null,grupos:[],
         createdAt:new Date().toISOString(),_recovered:true});
+      soloNombre++;
     }
   });
   await saveState();
   closeModal();
   renderCursos();
-  alert(`✅ Recuperados ${seleccionados.length} cursos. Edítalos para completar la información.`);
+  let msg=`✅ Recuperados ${seleccionados.length} curso(s).`;
+  if(conDatos) msg+=`\n${conDatos} con todos sus datos originales (horario, costo, salón, etc.)`;
+  if(soloNombre) msg+=`\n${soloNombre} solo con el nombre — no había respaldo, captura el resto manualmente.`;
+  alert(msg);
+}
+
+// ── DIAGNÓSTICO DE PAGOS: audita TODAS las matrículas y pagos en busca de las
+// mismas inconsistencias que hemos encontrado y corregido (folios huérfanos,
+// grupos duplicados, pagos incompletos, referencias rotas a cursos, etc.) ──
+function diagnosticoPagos(){
+  if(!hasPerm('modo_dios')){ alert('Solo el Modo Dios puede usar esta función.'); return; }
+
+  const cursoONombreExiste = (nombre) => {
+    if(!nombre) return false;
+    return (STATE.cursos||[]).some(c => c.nombre===nombre || (c.grupos||[]).some(g=>g.nombre===nombre));
+  };
+
+  // 1. Matrículas cuyo curso/grupo ya no existe en ningún lado
+  const matriculasRotas = (STATE.matrículas||[]).filter(m => m.curso && !cursoONombreExiste(m.curso));
+
+  // 2. Pagos cuyo folio no corresponde a ninguna matrícula (huérfanos)
+  const foliosValidos = new Set((STATE.matrículas||[]).map(m=>m.folio));
+  const pagosHuerfanos = (STATE.pagosRegulares||[]).filter(p => p.crmFolio!=null && !foliosValidos.has(p.crmFolio));
+
+  // 3. Pagos con datos incompletos (sin monto o sin método) — el patrón del bug
+  //    de guardarEdicionMasiva que dejaba registros "fantasma"
+  const pagosIncompletos = (STATE.pagosRegulares||[]).filter(p => p.montoFinal==null || !p.method);
+
+  // 4. Grupos duplicados dentro del mismo curso (el bug que causó la duplicación de JCA)
+  const gruposDuplicados = [];
+  (STATE.cursos||[]).forEach(c=>{
+    const nombres={};
+    (c.grupos||[]).forEach(g=>{
+      const key=(g.nombre||'').trim().toLowerCase();
+      if(!key) return;
+      nombres[key]=(nombres[key]||0)+1;
+    });
+    Object.entries(nombres).forEach(([nombre,count])=>{
+      if(count>1) gruposDuplicados.push({curso:c.nombre, grupo:nombre, count});
+    });
+  });
+
+  // 5. Folios de matrícula duplicados (no debería pasar nunca — chequeo defensivo)
+  const folioCounts={};
+  (STATE.matrículas||[]).forEach(m=>{ folioCounts[m.folio]=(folioCounts[m.folio]||0)+1; });
+  const foliosDuplicados = Object.entries(folioCounts).filter(([f,c])=>c>1).map(([f])=>parseInt(f));
+
+  // 6. Nombre de alumno desincronizado entre el pago y la matrícula actual
+  //    (ya NO afecta el estado de pago, que ahora se calcula por folio — pero
+  //    sigue siendo útil saberlo para que los reportes muestren el nombre correcto)
+  const nombresDesincronizados = [];
+  (STATE.pagosRegulares||[]).forEach(p=>{
+    if(p.crmFolio==null) return;
+    const m = (STATE.matrículas||[]).find(x=>x.folio===p.crmFolio);
+    if(m && p.alumnoNombre && m.alumno && p.alumnoNombre.trim()!==m.alumno.trim()){
+      nombresDesincronizados.push({folio:p.crmFolio, nombrePago:p.alumnoNombre, nombreActual:m.alumno});
+    }
+  });
+
+  const totalIssues = matriculasRotas.length + pagosHuerfanos.length + pagosIncompletos.length +
+    gruposDuplicados.length + foliosDuplicados.length + nombresDesincronizados.length;
+
+  const rowStyle = 'padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--surface)';
+  const seccion = (titulo, icon, items, renderItem) => items.length===0 ? '' : `
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;display:flex;align-items:center;gap:6px">
+        ${icon} ${titulo} <span class="sn-badge" style="background:var(--danger)">${items.length}</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${items.slice(0,30).map(renderItem).join('')}
+      </div>
+      ${items.length>30?`<div style="font-size:11px;color:var(--text3);margin-top:4px">… y ${items.length-30} más</div>`:''}
+    </div>`;
+
+  const body = totalIssues===0
+    ? `<div style="text-align:center;padding:30px 10px"><div style="font-size:40px;margin-bottom:10px">✅</div><div style="font-weight:600;color:var(--text);font-size:14px">No se encontraron inconsistencias</div><div style="font-size:12px;color:var(--text3);margin-top:4px">Todas las matrículas y pagos están correctamente vinculados.</div></div>`
+    : `
+    <div style="background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#92600a">
+      Se encontraron <strong>${totalIssues}</strong> inconsistencia(s). Revísalas abajo.
+    </div>
+    ${seccion('Matrículas con curso/grupo inexistente', '📚', matriculasRotas, m=>`
+      <div style="${rowStyle}">
+        <strong>${esc(m.alumno)}</strong> — Folio #${m.folio} — busca el curso <strong>"${esc(m.curso)}"</strong> que ya no existe
+        <div style="margin-top:4px"><button class="btn-ghost btn-sm" onclick="recuperarCursos()">Ir a recuperar cursos</button></div>
+      </div>`)}
+    ${seccion('Pagos sin matrícula asociada (huérfanos)', '💸', pagosHuerfanos, p=>`
+      <div style="${rowStyle}">
+        Folio #${p.crmFolio} — ${esc(p.alumnoNombre||'(sin nombre)')} — ${esc((p.meses||[]).join(', '))} — ${fmtMXN(p.montoFinal||0)}
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Este folio no corresponde a ninguna matrícula activa. Revisa si la matrícula fue borrada por error.</div>
+      </div>`)}
+    ${seccion('Pagos con datos incompletos', '⚠️', pagosIncompletos, p=>`
+      <div style="${rowStyle}">
+        Folio #${p.crmFolio} — ${esc(p.alumnoNombre||'(sin nombre)')} — ${esc((p.meses||[]).join(', '))}
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">${p.montoFinal==null?'Falta el monto. ':''}${!p.method?'Falta el método de pago. ':''}Es posible que no se sincronice correctamente con Contabilidad.</div>
+      </div>`)}
+    ${seccion('Grupos duplicados dentro del mismo curso', '👥', gruposDuplicados, d=>`
+      <div style="${rowStyle}">
+        Curso <strong>"${esc(d.curso)}"</strong> tiene <strong>${d.count}</strong> grupos llamados "${esc(d.grupo)}"
+        <div style="margin-top:4px"><button class="btn-ghost btn-sm" onclick="closeModal();showModalEditarCurso('${esc(d.curso).replace(/'/g,"\\'")}')">Editar curso</button></div>
+      </div>`)}
+    ${seccion('Folios de matrícula duplicados', '🔢', foliosDuplicados, f=>`
+      <div style="${rowStyle}">Folio #${f} está siendo usado por más de una matrícula. Esto no debería pasar — contáctanos si lo ves.</div>`)}
+    ${seccion('Nombre de alumno desincronizado en pagos', '✏️', nombresDesincronizados, d=>`
+      <div style="${rowStyle}">
+        Folio #${d.folio} — el pago dice "<strong>${esc(d.nombrePago)}</strong>" pero la matrícula actual dice "<strong>${esc(d.nombreActual)}</strong>"
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">Solo afecta el nombre mostrado en reportes — no afecta el estado de pago, que se calcula por folio.</div>
+      </div>`)}
+    `;
+
+  document.getElementById('modal-container').innerHTML=`
+  <div class="moverlay">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-hdr">
+      <div class="modal-title"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body" style="max-height:70vh;overflow-y:auto">
+      ${body}
+    </div>
+    <div style="display:flex;justify-content:flex-end;padding:14px;border-top:1px solid var(--border)">
+      <button class="btn-ghost" onclick="closeModal()">Cerrar</button>
+    </div>
+  </div></div>`;
 }
 
 
@@ -6593,12 +6777,21 @@ function getPrecioPaquete(curso, n){
     }
     return true;
   });
-  candidatas.sort(function(a,b){return (b.mesesMinimos||0)-(a.mesesMinimos||0);});
+  // Orden: primero por mesesMinimos descendente (preferir el escalón más alto que
+  // el cliente alcanza), y en caso de EMPATE, por el descuento resultante (mayor
+  // descuento gana) — antes un empate se resolvía por orden arbitrario del arreglo,
+  // lo que podía aplicar la promo menos conveniente para el cliente sin razón.
+  var descuentoDe = function(p){ return p.tipo==='porcentaje' ? base*((p.valor||0)/100) : (p.valor||0); };
+  candidatas.sort(function(a,b){
+    var diff=(b.mesesMinimos||0)-(a.mesesMinimos||0);
+    if(diff!==0) return diff;
+    return descuentoDe(b)-descuentoDe(a);
+  });
   var promo=candidatas[0]||null;
   var precio=base;
   var label=base>0?('Precio regular — $'+base.toLocaleString('es-MX')+' c/u'):'—';
   if(promo){
-    var desc = promo.tipo==='porcentaje' ? base*((promo.valor||0)/100) : (promo.valor||0);
+    var desc = descuentoDe(promo);
     precio = Math.max(0, base-desc);
     label = promo.nombre+' — $'+precio.toLocaleString('es-MX')+' c/u';
   }
