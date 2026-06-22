@@ -2755,9 +2755,16 @@ let pagoSubTab='registrar';
 function renderPagos(){
   if(!hasPerm('ver_pagos')){document.getElementById('main-content').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><h3>Sin acceso</h3></div>';return;}
   const cm=monthStr();
-  const pagosMes=STATE.pagosRegulares.filter(p=>p.meses&&p.meses.includes(cm));
+  const pagosMes=(STATE.pagosRegulares||[]).filter(p=>p.meses&&p.meses.includes(cm));
   const alumnosPagados=new Set(pagosMes.map(p=>p.crmFolio)).size; // FIX: por folio
-  const pending=STATE.matrículas.filter(m=>!pagosMes.some(p=>p.crmFolio===m.folio)).length; // FIX: por folio, no por nombre
+  const pending=(STATE.matrículas||[]).filter(m=>!pagosMes.some(p=>p.crmFolio===m.folio)).length; // FIX: por folio, no por nombre
+  // Segmentación nuevos vs anteriores: folio cuya inscripción fue ESTE mes
+  const _folioNuevosPag=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>m.folio));
+  const _pagosAnt=pagosMes.filter(p=>!_folioNuevosPag.has(p.crmFolio));
+  const _pagosNvo=pagosMes.filter(p=>_folioNuevosPag.has(p.crmFolio));
+  const _montoAnt=_pagosAnt.reduce((s,p)=>s+(p.montoFinal||0),0);
+  const _montoNvo=_pagosNvo.reduce((s,p)=>s+(p.montoFinal||0),0);
+  const _nNuevos=_folioNuevosPag.size;
   document.getElementById('main-content').innerHTML=`
   <div class="page-header fade-in" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px">
     <div>
@@ -2771,6 +2778,26 @@ function renderPagos(){
     <div class="stat-card" style="--stripe:var(--danger)"><div class="stat-label">${t('pag_pendientes_stat')}</div><div class="stat-val">${pending}</div><div class="stat-sub">${t('pag_sin_pago')}</div></div>
     <div class="stat-card" style="--stripe:#6366f1"><div class="stat-label">${t('pag_ingresos')}</div><div class="stat-val" style="font-size:18px">${fmtMXN(pagosMes.reduce((s,p)=>s+(p.montoFinal||0),0))}</div><div class="stat-sub">${pagosMes.length} pago${pagosMes.length===1?'':'s'} registrado${pagosMes.length===1?'':'s'}</div></div>
     <div class="stat-card" style="--stripe:var(--warn)"><div class="stat-label">${t('pag_promos')}</div><div class="stat-val">${STATE.promociones.filter(p=>p.activa&&p.fechaFin>=cm).length}</div><div class="stat-sub">disponibles para aplicar</div></div>
+  </div>
+  <!-- ── Desglose financiero: anteriores vs nuevos ── -->
+  <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 20px;margin-bottom:16px;display:flex;gap:0;flex-wrap:wrap;align-items:stretch" class="fade-in">
+    <div style="flex:1;min-width:150px;padding-right:20px">
+      <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Alumnos anteriores</div>
+      <div style="font-size:20px;font-weight:700;font-family:'DM Mono',monospace;color:var(--text)">\${fmtMXN(_montoAnt)}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:3px">\${_pagosAnt.length} pago\${_pagosAnt.length===1?'':'s'} cobrado\${_pagosAnt.length===1?'':'s'} · ingreso base</div>
+    </div>
+    <div style="width:1px;background:var(--border);margin:0 20px 0 0;flex-shrink:0"></div>
+    <div style="flex:1;min-width:150px;padding-right:20px">
+      <div style="font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">🆕 Nuevos este mes</div>
+      <div style="font-size:20px;font-weight:700;font-family:'DM Mono',monospace;color:var(--accent)">\${fmtMXN(_montoNvo)}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:3px">\${_pagosNvo.length} pago\${_pagosNvo.length===1?'':'s'} · \${_nNuevos} alumno\${_nNuevos===1?'':'s'} inscrito\${_nNuevos===1?'':'s'} este mes</div>
+    </div>
+    <div style="width:1px;background:var(--border);margin:0 20px 0 0;flex-shrink:0"></div>
+    <div style="flex:1;min-width:150px">
+      <div style="font-size:10px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Total cobrado</div>
+      <div style="font-size:24px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green)">\${fmtMXN(_montoAnt+_montoNvo)}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:3px">\${pagosMes.length} contrato\${pagosMes.length===1?'':'s'} de \${(STATE.matrículas||[]).length} matriculados</div>
+    </div>
   </div>
   <div class="tab-nav">
     <button class="tab-btn${pagoSubTab==='registrar'?' active':''}" data-tab="registrar" onclick="switchPagoTab('registrar')"><i class="ti ti-plus"></i> ${t('pag_tab_registrar')}</button>
@@ -3391,16 +3418,26 @@ function limpiarFormPago(){selectedMeses=[];selectedMethod='';renderPagoTab();}
 
 // ── Historial ──────────────────────────────────
 function buildHistorialPagos(){
-  const todos=[...STATE.pagosRegulares].sort((a,b)=>b.fecha.localeCompare(a.fecha));
+  const cm=monthStr();
+  // Identificar folios de inscripciones nuevas este mes para marcarlos en el historial
+  const _folioNvosH=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>m.folio));
+  const todos=[...(STATE.pagosRegulares||[])].sort((a,b)=>(b.fecha||'').localeCompare(a.fecha||''));
   if(todos.length===0)return`<div class="empty"><div class="empty-icon">📄</div><h3>${t('pag_hist_sin')}</h3><p>${t('pag_hist_sin_sub')}</p></div>`;
   const methodBadge=m=>m==='cash'?'<span class="badge badge-cash">💵 Efectivo</span>':m==='transfer'?'<span class="badge badge-transfer">🏦 Transferencia</span>':'<span class="badge badge-card">💳 Terminal MP</span>';
+  // Calcular desglose del MES ACTUAL para el footer
+  const pagosMesH=todos.filter(p=>p.meses&&p.meses.includes(cm));
+  const _antH=pagosMesH.filter(p=>!_folioNvosH.has(p.crmFolio));
+  const _nvoH=pagosMesH.filter(p=>_folioNvosH.has(p.crmFolio));
   return`<div class="table-wrap fade-in">
     <table>
       <thead><tr><th>Fecha</th><th>Alumno</th><th>Curso</th><th>Meses cubiertos</th><th>Método</th><th>Monto</th><th>Neto</th><th>Promo</th><th></th></tr></thead>
       <tbody>
       ${todos.map(p=>`<tr>
         <td style="font-size:12px;color:var(--text2);font-family:'DM Mono',monospace">${p.fecha}</td>
-        <td><div style="font-weight:600">${p.alumnoNombre}</div><div style="font-size:11px;color:var(--text3)">Folio #${p.crmFolio}</div></td>
+        <td>
+          <div style="font-weight:600">${p.alumnoNombre}${_folioNvosH.has(p.crmFolio)?` <span style="font-size:9px;background:var(--accent);color:#fff;border-radius:4px;padding:1px 5px;vertical-align:middle;font-weight:700">🆕 NUEVO</span>`:''}</div>
+          <div style="font-size:11px;color:var(--text3)">Folio #${p.crmFolio}</div>
+        </td>
         <td><span class="badge badge-admin">${p.curso}</span></td>
         <td style="font-size:12px">${(p.meses||[]).map(m=>mesLabel(m)).join(', ')}</td>
         <td>${methodBadge(p.method)}</td>
@@ -3416,7 +3453,15 @@ function buildHistorialPagos(){
     <span>${t('pag_hist_cobrado')}: <strong class="monto-tag">${fmtMXN(todos.reduce((s,p)=>s+(p.montoFinal||0),0))}</strong></span>
     <span>${t('pag_hist_neto')}: <strong style="color:var(--green)">${fmtMXN(todos.reduce((s,p)=>s+(p.neto||0),0))}</strong></span>
     <span>${t('pag_hist_comision')}: <strong style="color:var(--danger)">${fmtMXN(todos.reduce((s,p)=>s+(p.commMP||0)+(p.ivaMP||0),0))}</strong></span>
-  </div>`;
+  </div>
+  ${pagosMesH.length>0?`<div style="margin-top:10px;padding:10px 16px;border:1px solid var(--border);border-radius:8px;background:var(--surface);font-size:12px">
+    <div style="font-weight:700;color:var(--text2);margin-bottom:6px;font-size:11px;text-transform:uppercase;letter-spacing:.5px">Desglose ${mesLabel(cm)}</div>
+    <div style="display:flex;gap:20px;flex-wrap:wrap">
+      <span>Anteriores: <strong class="monto-tag">${fmtMXN(_antH.reduce((s,p)=>s+(p.montoFinal||0),0))}</strong> <span style="color:var(--text3)">(${_antH.length} pago${_antH.length===1?'':'s'})</span></span>
+      <span>🆕 Nuevos: <strong style="color:var(--accent)">${fmtMXN(_nvoH.reduce((s,p)=>s+(p.montoFinal||0),0))}</strong> <span style="color:var(--text3)">(${_nvoH.length} pago${_nvoH.length===1?'':'s'})</span></span>
+      <span>Total mes: <strong style="color:var(--green)">${fmtMXN(pagosMesH.reduce((s,p)=>s+(p.montoFinal||0),0))}</strong></span>
+    </div>
+  </div>`:''}`;
 }
 
 async function eliminarPago(id){
@@ -3428,23 +3473,43 @@ async function eliminarPago(id){
 // ── Pendientes ─────────────────────────────────
 function buildPendientes(){
   const cm=monthStr();
-  const pagosMes=STATE.pagosRegulares.filter(p=>p.meses&&p.meses.includes(cm));
+  const pagosMes=(STATE.pagosRegulares||[]).filter(p=>p.meses&&p.meses.includes(cm));
   const pagados=new Set(pagosMes.map(p=>p.crmFolio)); // FIX: por folio, no por nombre
-  const pendientes=STATE.matrículas.filter(m=>!pagados.has(m.folio));
+  const pendientes=(STATE.matrículas||[]).filter(m=>!pagados.has(m.folio));
   if(pendientes.length===0)return`<div class="empty"><div class="empty-icon">🎉</div><h3>¡Todos pagaron!</h3><p>${t('pag_pend_vacia_sub')} ${mesLabel(cm)}</p></div>`;
-  return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong>:</div>
-  <div class="table-wrap fade-in"><table>
-    <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
-    <tbody>
-    ${pendientes.map(m=>`<tr>
+  // Separar pendientes: anteriores (base mínima garantizada) vs nuevos este mes
+  const folioNuevos=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>m.folio));
+  const pendAnt=pendientes.filter(m=>!folioNuevos.has(m.folio));
+  const pendNvo=pendientes.filter(m=>folioNuevos.has(m.folio));
+  const filasPend=group=>`${group.map(m=>`<tr>
       <td style="font-weight:600">${m.alumno}</td>
       <td><span class="folio-tag">#${m.folio}</span></td>
       <td><span class="badge badge-admin">${m.curso}</span></td>
       <td style="font-size:12px;color:var(--text2)">${m.email||'—'}</td>
       <td><button class="btn-green btn-sm" onclick="precargarPago(${m.folio})"><i class="ti ti-cash"></i> ${t('pag_reg_pago')}</button></td>
-    </tr>`).join('')}
-    </tbody>
-  </table></div>`;
+    </tr>`).join('')}`;
+  const tablaBase=`<div class="table-wrap fade-in"><table>
+    <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
+    <tbody>${filasPend(pendientes)}</tbody></table></div>`;
+  // Cuando hay mezcla de anteriores y nuevos, separarlos visualmente
+  if(pendAnt.length>0&&pendNvo.length>0){
+    return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong> — ${pendientes.length} total:</div>
+    <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Alumnos anteriores (${pendAnt.length})</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Estos son el ingreso base mínimo esperado del mes.</div>
+    <div class="table-wrap fade-in"><table>
+      <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
+      <tbody>${filasPend(pendAnt)}</tbody></table></div>
+    <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">🆕 Nuevos inscritos este mes (${pendNvo.length})</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Se inscribieron este mes, pendientes de registrar primer pago.</div>
+    <div class="table-wrap fade-in"><table>
+      <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
+      <tbody>${filasPend(pendNvo)}</tbody></table></div>`;
+  }
+  // Si todos son del mismo tipo, tabla única con etiqueta apropiada
+  const label=pendNvo.length===pendientes.length
+    ?`${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong> — 🆕 todos son nuevos inscritos este mes:`
+    :`${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong>:`;
+  return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${label}</div>${tablaBase}`;
 }
 
 function precargarPago(folio){
@@ -3622,11 +3687,17 @@ function _renderAlumnosCards(){
   // cualquiera de ellas sigue sin cubrirse, la tarjeta marca "Pendiente"; si están todas
   // cubiertas (pago este mes, o liquidadas si son de pago único), marca "Pagó".
   var folioTieneAlgunPago=new Set((STATE.pagosRegulares||[]).map(function(p){return p.crmFolio;}));
+  // Identificar folios de matrículas inscritas ESTE mes
+  var folioNuevosAlm=new Set((STATE.matrículas||[]).filter(function(m){return m.fechaISO&&m.fechaISO.startsWith(cm);}).map(function(m){return m.folio;}));
   function matriculaCubierta(x){
     if(x.pagoTipo==='unico'){
       return folioTieneAlgunPago.has(x.folio) || (!x.autorizacionPendiente && (x.primerPago||0)>0);
     }
     return pagados.has(x.folio);
+  }
+  // Un alumno es "nuevo este mes" si CUALQUIERA de sus matrículas es nueva este mes
+  function esNuevoEsteMes(nombre){
+    return (STATE.matrículas||[]).some(function(x){return x.alumno===nombre&&folioNuevosAlm.has(x.folio);});
   }
   if(q) alumnos=alumnos.filter(function(m){
     return m.alumno.toLowerCase().includes(q)
@@ -3638,16 +3709,37 @@ function _renderAlumnosCards(){
     el.innerHTML='<div class="empty"><div class="empty-icon">🎓</div><h3>'+t('alm_sin_alumnos')+'</h3></div>';
     return;
   }
-  el.innerHTML='<div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">'
+  // Barra de resumen: totales globales (antes del filtro de búsqueda)
+  var nTotal=alumnos.length;
+  var nNuevosAlm=alumnos.filter(function(m){return esNuevoEsteMes(m.alumno);}).length;
+  var nAnteriores=nTotal-nNuevosAlm;
+  var resumenBar=nNuevosAlm>0
+    ?('<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 16px;margin-bottom:10px;display:flex;gap:20px;font-size:12px;flex-wrap:wrap;align-items:center">'
+      +'<span style="color:var(--text2)"><strong style="color:var(--text)">'+nTotal+'</strong> alumno'+(nTotal===1?'':'s')+(q?' encontrado'+(nTotal===1?'':'s'):'')+'</span>'
+      +'<span style="color:var(--text3)">|</span>'
+      +'<span style="color:var(--text2)">Anteriores: <strong style="color:var(--text)">'+nAnteriores+'</strong></span>'
+      +'<span style="color:var(--text3)">|</span>'
+      +'<span style="color:var(--accent);font-weight:700">🆕 Nuevos este mes: <strong>'+nNuevosAlm+'</strong></span>'
+      +'</div>')
+    :('<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 16px;margin-bottom:10px;font-size:12px;color:var(--text2)">'
+      +'<strong style="color:var(--text)">'+nTotal+'</strong> alumno'+(nTotal===1?'':'s')+(q?' encontrado'+(nTotal===1?'':'s'):'')
+      +'</div>');
+  el.innerHTML=resumenBar
+    +'<div style="display:flex;flex-direction:column;gap:10px">'
     +alumnos.map(function(m){
       var misMatriculas=STATE.matrículas.filter(function(x){return x.alumno===m.alumno;});
       var cursosCount=misMatriculas.length;
       var pago=misMatriculas.every(matriculaCubierta); // FIX: TODAS sus matrículas, no solo una
+      var esNuevo=esNuevoEsteMes(m.alumno);
       var ini=m.alumno.charAt(0).toUpperCase();
-      return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;align-items:center;gap:14px">'
-        +'<div style="width:46px;height:46px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;flex-shrink:0">'+ini+'</div>'
+      // Borde especial para alumnos nuevos este mes
+      var cardBorder=esNuevo?'border:1.5px solid var(--accent)':'border:1px solid var(--border)';
+      return '<div style="background:var(--surface);'+cardBorder+';border-radius:12px;padding:16px;display:flex;align-items:center;gap:14px">'
+        +'<div style="width:46px;height:46px;border-radius:50%;background:'+(esNuevo?'var(--accent)':'var(--accent)')+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;flex-shrink:0">'+ini+'</div>'
         +'<div style="flex:1;min-width:0">'
-        +'<div style="font-weight:700;font-size:14px;margin-bottom:2px">'+esc(m.alumno)+'</div>'
+        +'<div style="font-weight:700;font-size:14px;margin-bottom:2px">'+esc(m.alumno)
+          +(esNuevo?' <span style="font-size:9px;background:var(--accent);color:#fff;border-radius:4px;padding:1px 6px;vertical-align:middle;font-weight:700">🆕 NUEVO</span>':'')
+        +'</div>'
         +'<div style="font-size:12px;color:var(--text3)">'+esc(m.curso)+(cursosCount>1?' + '+(cursosCount-1)+' más':'')+'</div>'
         +(m.email?'<div style="font-size:11px;color:var(--text3);margin-top:2px">'+esc(m.email)+'</div>':'')
         +'</div>'
