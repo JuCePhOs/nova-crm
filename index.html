@@ -5456,8 +5456,17 @@ async function darDeBaja(folio) {
 
 async function eliminarMatriculaPermanente(folio) {
   const m=STATE.matrículas.find(x=>x.folio===folio);
-  if(!confirm(t('baja_elim_confirm')+(m?.alumno||'')+'?'))return;
+  // FIX: verificar si hay pagos registrados para este folio (igual que hace la versión masiva)
+  const pagosDelFolio=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio===folio);
+  let msg=t('baja_elim_confirm')+(m?.alumno||'')+'?';
+  if(pagosDelFolio.length>0){
+    msg+='\n\n🔴 ATENCIÓN: Esta matrícula tiene '+pagosDelFolio.length+' pago'+(pagosDelFolio.length!==1?'s':'')+' registrado'+(pagosDelFolio.length!==1?'s':'')+' ('+pagosDelFolio.map(p=>(p.meses||[]).join(', ')).join(' | ')+').\nAl eliminar la matrícula, esos pagos también se borrarán del CRM y se eliminarán de Contabilidad automáticamente.';
+  }
+  if(!confirm(msg))return;
   STATE.matrículas=STATE.matrículas.filter(x=>x.folio!==folio);
+  // FIX: borrar también los pagosRegulares del folio — si no se hace, quedan como
+  // "huérfanos invisibles" en CRM y Contabilidad nunca limpia el ingreso correspondiente.
+  STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio!==folio);
   if(STATE.autorizacionesPago) STATE.autorizacionesPago=STATE.autorizacionesPago.filter(a=>a.folio!==folio||a.estado!=='pendiente');
   await saveState();
   closeModal();
@@ -6385,6 +6394,28 @@ async function confirmarRecuperacion(){
   alert(msg);
 }
 
+// ── LIMPIAR PAGOS HUÉRFANOS: elimina de CRM los pagosRegulares cuyo folio
+// no corresponde a ninguna matrícula activa. Una vez borrados de CRM, Contabilidad
+// detecta automáticamente que sus ingresos correspondientes son "huérfanos" y los
+// elimina en el próximo ciclo de sincronización.
+async function limpiarPagosHuerfanosCRM(){
+  if(!hasPerm('modo_dios')){ alert('Solo el Modo Dios puede usar esta función.'); return; }
+  const foliosValidos=new Set((STATE.matrículas||[]).map(m=>m.folio));
+  const huerfanos=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio!=null&&!foliosValidos.has(p.crmFolio));
+  if(huerfanos.length===0){ alert('✅ No hay pagos huérfanos. Todos los pagos tienen matrícula activa.'); return; }
+  const detalles=huerfanos.map(p=>`Folio #${p.crmFolio} — ${p.alumnoNombre||'(sin nombre)'} — ${(p.meses||[]).join(', ')} — ${fmtMXN(p.montoFinal||0)}`).join('\n');
+  if(!confirm(
+    `🗑️ Eliminar ${huerfanos.length} pago${huerfanos.length===1?'':'s'} huérfano${huerfanos.length===1?'':'s'} de CRM?\n\n${detalles}\n\nAl confirmar:\n• Los pagos se borran de CRM permanentemente.\n• Contabilidad detectará automáticamente que los ingresos correspondientes ya no tienen respaldo en CRM y los eliminará en el próximo ciclo de sincronización.\n• Los ingresos editados manualmente en Contabilidad (no generados por auto-sync) NO se verán afectados.\n\nEsta acción NO se puede deshacer.`
+  ))return;
+  const foliosHuerfanos=new Set(huerfanos.map(p=>p.crmFolio));
+  STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(p=>!foliosHuerfanos.has(p.crmFolio));
+  await saveState();
+  closeModal();
+  renderPagos();
+  buildSidebar();
+  setTimeout(()=>alert(`✅ Eliminados ${huerfanos.length} pago${huerfanos.length===1?'':'s'} huérfano${huerfanos.length===1?'':'s'}. Recarga Contabilidad en unos segundos para ver los cambios reflejados.`),200);
+}
+
 // ── DIAGNÓSTICO DE PAGOS: audita TODAS las matrículas y pagos en busca de las
 // mismas inconsistencias que hemos encontrado y corregido (folios huérfanos,
 // grupos duplicados, pagos incompletos, referencias rotas a cursos, etc.) ──
@@ -6464,11 +6495,29 @@ function diagnosticoPagos(){
         <strong>${esc(m.alumno)}</strong> — Folio #${m.folio} — busca el curso <strong>"${esc(m.curso)}"</strong> que ya no existe
         <div style="margin-top:4px"><button class="btn-ghost btn-sm" onclick="recuperarCursos()">Ir a recuperar cursos</button></div>
       </div>`)}
-    ${seccion('Pagos sin matrícula asociada (huérfanos)', '💸', pagosHuerfanos, p=>`
-      <div style="${rowStyle}">
-        Folio #${p.crmFolio} — ${esc(p.alumnoNombre||'(sin nombre)')} — ${esc((p.meses||[]).join(', '))} — ${fmtMXN(p.montoFinal||0)}
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">Este folio no corresponde a ninguna matrícula activa. Revisa si la matrícula fue borrada por error.</div>
-      </div>`)}
+    ${pagosHuerfanos.length>0?`
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;display:flex;align-items:center;gap:6px">
+        💸 Pagos sin matrícula asociada (huérfanos) <span class="sn-badge" style="background:var(--danger)">${pagosHuerfanos.length}</span>
+      </div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:8px">
+        Estos pagos pertenecen a folios que ya no tienen matrícula — posiblemente de matrículas eliminadas sin borrar sus pagos.
+        Mientras permanezcan en CRM, Contabilidad no puede limpiar los ingresos correspondientes.
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+        ${pagosHuerfanos.slice(0,30).map(p=>`
+        <div style="${rowStyle}">
+          Folio #${p.crmFolio} — ${esc(p.alumnoNombre||'(sin nombre)')} — ${esc((p.meses||[]).join(', '))} — ${fmtMXN(p.montoFinal||0)}
+        </div>`).join('')}
+        ${pagosHuerfanos.length>30?`<div style="font-size:11px;color:var(--text3);margin-top:4px">… y ${pagosHuerfanos.length-30} más</div>`:''}
+      </div>
+      <button class="btn-danger btn-sm" onclick="limpiarPagosHuerfanosCRM()" style="font-size:12px">
+        <i class="ti ti-trash"></i> Eliminar los ${pagosHuerfanos.length} pago${pagosHuerfanos.length===1?'':'s'} huérfano${pagosHuerfanos.length===1?'':'s'} de CRM
+      </button>
+      <div style="font-size:11px;color:var(--text3);margin-top:6px">
+        Contabilidad detectará el cambio automáticamente y borrará los ingresos correspondientes.
+      </div>
+    </div>`:''}
     ${seccion('Pagos con datos incompletos', '⚠️', pagosIncompletos, p=>`
       <div style="${rowStyle}">
         Folio #${p.crmFolio} — ${esc(p.alumnoNombre||'(sin nombre)')} — ${esc((p.meses||[]).join(', '))}
