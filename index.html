@@ -6833,22 +6833,27 @@ function recalcMultiPago(cursoNombre){
   document.getElementById('mi-precio').textContent = '$'+precio.toLocaleString('es-MX')+' MXN';
   document.getElementById('mi-paquete').textContent = pp.label;
   document.getElementById('mi-total').textContent = '$'+total.toLocaleString('es-MX')+' MXN';
-  document.getElementById('f-pago').value = total;
+  // FIX: solo actualizar f-pago si el usuario no lo modificó manualmente
+  var _fp=document.getElementById('f-pago');
+  if(_fp&&(_fp.dataset.default==='1'||!_fp.value)){_fp.value=total;_fp.dataset.default='1';}
   var inp=document.getElementById('mi-total-input');
   var minTxt=document.getElementById('mi-min-txt');
   if(inp){
     var autoPrevio=parseFloat(inp.getAttribute('data-autoval')||'0');
     var valorActual=parseFloat(inp.value)||0;
     var fueEditadoManualmente = inp.value!=='' && valorActual!==autoPrevio;
-    if(!fueEditadoManualmente || valorActual<total){
-      // No lo había tocado el admin desde el último cálculo (o su número quedó por debajo
-      // del nuevo mínimo): seguir el total automático tanto si sube como si baja.
+    // FIX: solo actualizar si el usuario NO lo ha tocado manualmente
+    if(!fueEditadoManualmente){
       inp.value=total;
     }
-    // Si SÍ lo editó a mano y su número sigue siendo válido (>= nuevo total), se respeta tal cual.
     inp.setAttribute('data-autoval',total);
-    inp.setAttribute('data-min',total);
-    inp.min=total;
+    // FIX: data-min = costoBase×grupos (mínimo real). El precio de la promo NO es el piso.
+    if(cursoNombre){
+      var cursoObjM2=(STATE.cursos||[]).find(function(c){return c.nombre===cursoNombre;});
+      var costoB2=cursoObjM2?(parseFloat(String(cursoObjM2.costoBase||'').replace(/[^0-9.]/g,''))||0):0;
+      inp.setAttribute('data-min',Math.floor(costoB2*n));
+    } else { inp.setAttribute('data-min',0); }
+    inp.removeAttribute('min'); // FIX CLAVE: quitar min HTML que el navegador enforza
     if(minTxt)minTxt.textContent='$'+total.toLocaleString('es-MX');
     onManualTotalChange();
   }
