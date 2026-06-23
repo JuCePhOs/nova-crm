@@ -3420,13 +3420,17 @@ function buildHistorialPagos(){
   const _antH=pagosMesH.filter(p=>!_folioNvosH.has(p.crmFolio));
   const _nvoH=pagosMesH.filter(p=>_folioNvosH.has(p.crmFolio));
   const canEdit=hasPerm('gestionar_pagos');
-  return`<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+  return`<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
     <div style="position:relative;flex:1;min-width:220px">
       <i class="ti ti-search" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text3);font-size:14px;pointer-events:none"></i>
-      <input type="text" placeholder="Buscar por alumno, curso, folio, método, mes…" value="${esc(_historialQ||'')}"
-        oninput="_historialQ=this.value;document.getElementById('hist-wrap').outerHTML=buildHistorialPagos()"
+      <input id="hist-search-input" type="text" placeholder="Buscar por alumno, curso, folio, método, mes…" value="${esc(_historialQ||'')}"
+        onkeydown="if(event.key==='Enter'){_historialQ=this.value;document.getElementById('pago-content').innerHTML=buildHistorialPagos();}"
         style="width:100%;box-sizing:border-box;padding:8px 10px 8px 32px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px">
     </div>
+    <button class="btn-primary btn-sm" style="white-space:nowrap" onclick="_historialQ=document.getElementById('hist-search-input')?.value||'';document.getElementById('pago-content').innerHTML=buildHistorialPagos();">
+      <i class="ti ti-search"></i> Buscar
+    </button>
+    ${_historialQ?`<button class="btn-ghost btn-sm" onclick="_historialQ='';document.getElementById('pago-content').innerHTML=buildHistorialPagos();" title="Limpiar búsqueda"><i class="ti ti-x"></i></button>`:''}
     ${q?`<span style="font-size:12px;color:var(--text3)">${todos.length} de ${todosSinFiltro.length} resultados</span>`:''}
   </div>
   <div id="hist-wrap" class="table-wrap fade-in">
@@ -7574,16 +7578,34 @@ function renderMaestros(){
   }
 
   var rows = inst.map(function(p){
-    var _hObj=horasImpartidas(p.id); var hImp=_hObj.total; var hPlan=horasPlaneadas(p.id);
-    var tarifaA=p.tarifaHoraAsistente||p.tarifaHora;
-    var totalMes=+(_hObj.hPrincipal*(p.tarifaHora||0)+_hObj.hAsistente*(tarifaA||0)).toFixed(2);
+    // ── Mes anterior (cm): horas impartidas → lo que se paga ESTE mes ──────
+    var _hObj=horasImpartidas(p.id);
+    var tarifaA=p.tarifaHoraAsistente||p.tarifaHora||0;
+    var hAntTotal=_hObj.total;
+    var totalAntMes=+(_hObj.hPrincipal*(p.tarifaHora||0)+_hObj.hAsistente*tarifaA).toFixed(2);
+    // ── Mes actual (mesActual): horas finalizadas hasta hoy → se pagan el mes siguiente ──
+    var maestroInst=(STATE.instructores||[]).find(function(x){return x.id===p.id;});
+    var altIds=maestroInst&&maestroInst.userId?[p.id,maestroInst.userId]:[p.id];
+    var hActP=0,hActA=0;
+    (STATE.sesionesClase||[]).forEach(function(s){
+      if(s.mes!==mesActual) return;
+      var esInstr=altIds.indexOf(s.instructorId)>=0;
+      var esAsist=altIds.indexOf(s.asistenteId)>=0;
+      if(esInstr&&s.estadoP==='finalizada') hActP+=(s.horasInstructor||0);
+      if(esAsist&&s.estadoA==='finalizada') hActA+=(s.horasAsistente||0);
+      if(s.estado==='finalizada'&&!s.estadoP&&!s.estadoA){
+        if(esInstr) hActP+=(s.horasInstructor||0);
+        if(esAsist) hActA+=(s.horasAsistente||0);
+      }
+    });
+    var hActTotal=hActP+hActA;
+    var totalActMes=+(hActP*(p.tarifaHora||0)+hActA*tarifaA).toFixed(2);
     var tipoBadge = p.tipo==='asistente'
       ? '<span style="background:rgba(107,45,146,.1);color:var(--accent);border-radius:4px;padding:1px 7px;font-size:11px">Asistente</span>'
       : '<span style="background:rgba(16,185,129,.1);color:var(--green);border-radius:4px;padding:1px 7px;font-size:11px">Instructor</span>';
     var activoBadge = p.activo!==false
       ? '<span style="color:var(--green);font-size:11px">● Activo</span>'
       : '<span style="color:var(--text3);font-size:11px">○ Inactivo</span>';
-
     var isInact=p.activo===false||p.activo==='false';
     var trStyle=isInact?'background:#fde8e6;outline:2px solid #c0392b;outline-offset:-2px':'';
     return '<tr style="'+trStyle+'">'
@@ -7591,10 +7613,13 @@ function renderMaestros(){
       + (p.especialidad?'<div style="font-size:11px;color:var(--text3)">'+p.especialidad+'</div>':'')
       + '</td>'
       + '<td>'+tipoBadge+'</td>'
-      + '<td class="monto-tag">'+fmtMXN(p.tarifaHora)+'/hr</td>'
-      + '<td><span style="font-size:13px;font-weight:600">'+hImp.toFixed(1)+'</span>'
-      + '<span style="font-size:11px;color:var(--text3)"> / '+hPlan.toFixed(1)+' plan.</span></td>'
-      + '<td class="monto-tag" style="color:var(--green)">'+fmtMXN(totalMes)+'</td>'
+      + '<td class="monto-tag" style="font-size:12px">'+fmtMXN(p.tarifaHora)+'/hr</td>'
+      + '<td style="text-align:right"><span style="font-size:13px;font-weight:700;color:var(--text)">'+hAntTotal.toFixed(1)+'</span><span style="font-size:10px;color:var(--text3)"> hrs</span></td>'
+      + '<td class="monto-tag" style="color:var(--green);font-weight:700">'+fmtMXN(totalAntMes)+'</td>'
+      + '<td style="text-align:right"><span style="font-size:13px;font-weight:700;color:var(--text)">'+hActTotal.toFixed(1)+'</span><span style="font-size:10px;color:var(--text3)"> hrs</span>'
+      + (hActTotal===0?'<div style="font-size:10px;color:var(--text3)">sin sesiones finalizadas</div>':'')
+      + '</td>'
+      + '<td class="monto-tag" style="color:var(--accent)">'+fmtMXN(totalActMes)+'</td>'
       + '<td>'+activoBadge+'</td>'
       + (canEdit?'<td style="white-space:nowrap">'
         + '<button class="btn-ghost btn-sm" style="margin-right:4px" title="Ver sesiones del mes" onclick="showModalSesionesInstructor(\''+p.id+'\')"><i class="ti ti-calendar-stats"></i></button>'
@@ -7604,7 +7629,6 @@ function renderMaestros(){
         + '</td>':'')
       + '</tr>';
   }).join('');
-
   var totalSigMes = inst.reduce(function(acc,p){
     var hP=(STATE.sesionesClase||[]).filter(function(s){
       return s.mes===mesActual&&(s.instructorId===p.id||(p.userId&&s.instructorId===p.userId))&&s.estadoP==='finalizada';
@@ -7642,9 +7666,21 @@ function renderMaestros(){
     + (inst.length===0
       ? '<div class="empty"><div class="empty-icon">👨‍🏫</div><h3>'+t('mae_sin_instructores')+'</h3></div>'
       : '<div class="table-wrap fade-in"><table>'
-        + '<thead><tr><th>Instructor</th><th>Tipo</th><th>Tarifa/hr</th>'
-        + '<th>Horas (real / plan.)</th><th>Total mes</th><th>Estado</th>'
-        + (canEdit?'<th></th>':'') + '</tr></thead>'
+        + '<thead>'
+        + '<tr>'
+        + '<th rowspan="2">Instructor</th><th rowspan="2">Tipo</th><th rowspan="2">Tarifa/hr</th>'
+        + '<th colspan="2" style="text-align:center;background:rgba(16,185,129,.08);border-bottom:2px solid var(--green);font-size:11px">'+mesLabel(cm)+' — Pagar ESTE mes</th>'
+        + '<th colspan="2" style="text-align:center;background:rgba(139,92,246,.08);border-bottom:2px solid var(--accent);font-size:11px">'+mesLabel(mesActual)+' — Pagar el mes siguiente</th>'
+        + '<th rowspan="2">Estado</th>'
+        + (canEdit?'<th rowspan="2"></th>':'')
+        + '</tr>'
+        + '<tr>'
+        + '<th style="background:rgba(16,185,129,.05);font-size:11px">Horas impartidas</th>'
+        + '<th style="background:rgba(16,185,129,.05);font-size:11px">Total a pagar</th>'
+        + '<th style="background:rgba(139,92,246,.05);font-size:11px">Horas acumuladas</th>'
+        + '<th style="background:rgba(139,92,246,.05);font-size:11px">Proyección</th>'
+        + '</tr>'
+        + '</thead>'
         + '<tbody>'+rows+'</tbody></table></div>'
     )
 
