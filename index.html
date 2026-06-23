@@ -1234,7 +1234,7 @@ function buildSidebar(){
     {id:'inactivos',icon:'ti-user-off',label:t('nav_inactivos'),perm:'ver_alumnos',badge:(STATE.alumnosInactivos||[]).length||null,hideFor:'instructor'},
   {id:'clases',icon:'ti-calendar-event',label:'Mis Clases',perm:null,showFn:function(){return false;}},
   {id:'cursos_inst',icon:'ti-notebook',label:'Mis Cursos',perm:null,showFn:function(){return false;}},
-  {id:'dios',icon:'ti-tag',label:t('nav_dios'),perm:'modo_dios',showFn:function(){return hasPerm('modo_dios')&&currentUser&&currentUser.role!=='instructor';},badge:((STATE.promociones||[]).filter(p=>p.estado==='pendiente').length+(STATE.solicitudesStack||[]).filter(s=>s.estado==='pendiente').length+(STATE.autorizacionesPago||[]).filter(a=>a.estado==='pendiente').length)||null},
+  {id:'dios',icon:'ti-tag',label:t('nav_dios'),perm:'gestionar_promociones',showFn:function(){return (hasPerm('modo_dios')||hasPerm('gestionar_promociones'))&&currentUser&&currentUser.role!=='instructor';},badge:((STATE.promociones||[]).filter(p=>p.estado==='pendiente').length+(STATE.solicitudesStack||[]).filter(s=>s.estado==='pendiente').length+(STATE.autorizacionesPago||[]).filter(a=>a.estado==='pendiente').length)||null},
   ];
   const logoutBtn=document.getElementById('sb-logout-btn');
   if(logoutBtn)logoutBtn.innerHTML='<i class="ti ti-logout"></i> '+t('nav_salir');
@@ -2824,7 +2824,7 @@ function renderPagos(){
     <button class="tab-btn${pagoSubTab==='historial'?' active':''}" data-tab="historial" onclick="switchPagoTab('historial')"><i class="ti ti-list"></i> ${t('pag_tab_historial')}</button>
     <button class="tab-btn${pagoSubTab==='masivo'?' active':''}" data-tab="masivo" onclick="switchPagoTab('masivo')"><i class="ti ti-cash-banknote"></i> Pago Masivo</button>
     <button class="tab-btn${pagoSubTab==='pendientes'?' active':''}" data-tab="pendientes" onclick="switchPagoTab('pendientes')"><i class="ti ti-user-exclamation"></i> ${t('pag_tab_pendientes')} ${pending>0?`<span class="sn-badge" style="background:var(--danger);margin-left:4px">${pending}</span>`:''}</button>
-    <button class="tab-btn${pagoSubTab==='promos'?' active':''}" data-tab="promos" onclick="switchPagoTab('promos')"><i class="ti ti-tag"></i> ${t('pag_tab_promos')}</button>
+    <button class="tab-btn" onclick="navigate('dios')" title="Ir a gestión de Promociones"><i class="ti ti-tag"></i> ${t('pag_tab_promos')}</button>
   </div>
   <div id="pago-content"></div>`;
   renderPagoTab();
@@ -2845,7 +2845,6 @@ function renderPagoTab(){
   else if(pagoSubTab==='historial')el.innerHTML=buildHistorialPagos();
   else if(pagoSubTab==='pendientes')el.innerHTML=buildPendientes();
   else if(pagoSubTab==='masivo')el.innerHTML=buildPagoMasivo();
-  else if(pagoSubTab==='promos'){el.innerHTML=buildPromosPagos();attachPromoEvents();}
 
   attachPagoEvents();
 }
@@ -3624,35 +3623,6 @@ async function eliminarPago(id){
   await saveState();renderPagoTab();buildSidebar();
 }
 
-// ── Pestaña Promociones (dentro de Pagos) ──────────────────────────────────
-// Embebe el mismo contenido que renderModoDios() como sub-pestaña de Pagos.
-function buildPromosPagos(){
-  // Generamos el mismo HTML que la sección del Modo Dios directamente.
-  // Necesitamos un div contenedor con id sec-promos para que el scroll desde
-  // el Dashboard funcione correctamente aunque estemos dentro de pago-content.
-  var tmp=document.createElement('div');
-  tmp.id='sec-promos';
-  // Llama a renderModoDios() directamente para no duplicar la lógica
-  renderModoDios();
-  // Después de que renderModoDios() haya puesto su contenido en main-content,
-  // lo tomamos y lo devolvemos como string para pago-content.
-  var mc=document.getElementById('main-content');
-  return mc?mc.innerHTML:'';
-}
-
-function attachPromoEvents(){
-  // Los eventos de promociones son globales (guardarPromo, autorizarPromo, etc.)
-  // ya están disponibles sin necesidad de re-bindeo.
-  // Solo re-adjuntamos el form de creación si está visible.
-  var form=document.getElementById('sec-promos');
-  if(form){
-    var selCurso=form.querySelector('#promo-cursos-tipo');
-    if(selCurso&&!selCurso._bound){
-      selCurso._bound=true;
-    }
-  }
-  attachPagoEvents();
-}
 
 // ── Pendientes ─────────────────────────────────
 function buildPendientes(){
