@@ -6731,7 +6731,7 @@ cont.innerHTML='<div style="font-size:13px;font-weight:700;color:var(--text2);ma
     +'<input type="number" id="mi-total-input" step="1" style="width:100%;padding:7px 10px;border:2px solid var(--accent);border-radius:7px;font-size:15px;font-weight:700;color:var(--accent);box-sizing:border-box" oninput="onManualTotalChange()">'
     +'<div id="mi-dist-box" style="display:none;margin-top:7px;font-size:11px;color:var(--text3);padding:6px 10px;background:var(--surface);border-radius:6px;border:1px solid var(--border)">'
     +'<strong style="color:var(--text2)">Distribución:</strong> <span id="mi-dist-txt"></span></div>'
-    +'<div style="margin-top:8px;font-size:11px;color:var(--text3)">💡 Sólo se permite aumentar. El último contrato absorbe la diferencia.</div>'
+    +'<div id="mi-ajuste-warn" style="display:none;font-size:11px;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:6px;padding:6px 10px;margin-top:6px"></div>'    +'<div style="margin-top:6px;font-size:11px;color:var(--text3)">💡 Ajusta el total. Si es menor al costo base, se pedirá autorización.</div>'
     +'</div>'
     +'</div>';
 }
@@ -6751,7 +6751,18 @@ function onManualTotalChange(){
   if(!inp)return;
   var total=Math.floor(parseFloat(inp.value)||0);
   var min=parseInt(inp.getAttribute('data-min'))||0;
-  if(total<min){total=min;inp.value=min;}
+  // FIX: ya no bloqueamos el precio mínimo — si el usuario pone menos,
+  // se mostrará advertencia y al guardar se pedirá autorización.
+  var warn=document.getElementById('mi-ajuste-warn');
+  if(warn){
+    if(total>0&&min>0&&total<min){
+      warn.style.display='block';
+      warn.innerHTML='⚠️ Precio por debajo del costo base ('+fmtMXN(min)+').'
+        +(puedeAutorizarPromos()?' El Semidios puede autorizarlo directamente.':' Se enviará a autorización del Modo Dios al guardar.');
+    } else {
+      warn.style.display='none';
+    }
+  }
   var n=document.querySelectorAll('.f-grupo-chk:checked').length;
   if(n===0)return;
   var dist=distribuirPago(total,n);
@@ -6765,7 +6776,6 @@ function onManualTotalChange(){
     }
     box.style.display='block';
   }
-  // Sync to primer pago field
   var pf=document.getElementById('f-pago');
   if(pf) pf.value=total;
 }
@@ -6902,7 +6912,23 @@ async function guardarMatriculasMultiples(){
   var precioPorGrupo=getPrecioXGrupo(n);
   var autoTotal=precioPorGrupo*n;
   var inpManual=document.getElementById('mi-total-input');
-  var totalPago=Math.max(Math.floor(parseFloat(inpManual&&inpManual.value)||0),autoTotal);
+  var userInputTotal=Math.floor(parseFloat(inpManual&&inpManual.value)||0);
+  // FIX: respetar el precio que el usuario escribió en Ajustar total.
+  // Antes se usaba Math.max(..., autoTotal) que siempre forzaba al precio más alto.
+  var totalPago=userInputTotal>0?userInputTotal:autoTotal;
+  // ── Autorización si el precio está por debajo del costo base ──────────────
+  var cursoBase=parseFloat(String((cursoObj&&cursoObj.costoBase)||'').replace(/[^0-9.]/g,''))||0;
+  var minimoReqM=cursoObj?Math.max(cursoObj.pagoMinimo||0,cursoBase):0;
+  var necesitaAuthM=minimoReqM>0&&totalPago>0&&totalPago<minimoReqM&&!puedeAutorizarPromos();
+  var semidiosAuthM=minimoReqM>0&&totalPago>0&&totalPago<minimoReqM&&puedeAutorizarPromos();
+  var motivoAuthM='';
+  if(necesitaAuthM||semidiosAuthM){
+    var msgAuth=semidiosAuthM
+      ?'ℹ️ Semidios activo. Total $'+totalPago.toLocaleString('es-MX')+' < costo base $'+minimoReqM.toLocaleString('es-MX')+'.\nSe autorizará automáticamente. Escribe el motivo:'
+      :'⚠️ Total $'+totalPago.toLocaleString('es-MX')+' < costo base $'+minimoReqM.toLocaleString('es-MX')+'.\nLa matrícula quedará PENDIENTE de autorización del Modo Dios.\nMotivo (beca, caso especial, etc.):';
+    motivoAuthM=prompt(msgAuth);
+    if(motivoAuthM===null)return; // canceló
+  }
   var dist=distribuirPago(totalPago,n);
 
   // Method
@@ -6951,6 +6977,21 @@ async function guardarMatriculasMultiples(){
       createdAt:new Date().toISOString(),createdBy:currentUser.username});
   }
 
+  // Registrar solicitud de autorización si el precio fue por debajo del mínimo
+  if(necesitaAuthM&&motivoAuthM!==null){
+    if(!STATE.autorizacionesPago)STATE.autorizacionesPago=[];
+    foliosCreados.forEach(function(folio){
+      STATE.autorizacionesPago.push({
+        folio,alumno,curso,
+        montoPropuesto:Math.floor(totalPago/n),
+        minimoRequerido:minimoReqM,
+        motivo:motivoAuthM,
+        estado:'pendiente',
+        solicitadoEn:new Date().toISOString(),
+        solicitadoPor:currentUser.username
+      });
+    });
+  }
   await saveState();
   renderMatriculas();
   buildSidebar();
