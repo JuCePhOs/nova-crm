@@ -1147,29 +1147,17 @@ async function loadState(){
   if(!STATE.pagosGastosMaestros)STATE.pagosGastosMaestros=[];
   if(!STATE.asistencias)STATE.asistencias=[];
   if(STATE.tarifaAsistente===undefined)STATE.tarifaAsistente=60;
-  // AUTO-RECOVERY: rebuild missing courses from matrículas references.
-  // Usa el archivo de cursosEliminados para restaurar con TODOS los datos
-  // originales (horario, costo, salón, etc.) cuando esté disponible; si no,
-  // recupera al menos el nombre para no romper las referencias de matrículas/pagos.
+  // AUTO-RECOVERY: rebuild missing courses from matrículas references
   (()=>{
     const existingNames=new Set((STATE.cursos||[]).map(c=>c.nombre).filter(Boolean));
     const missing=new Set();
     (STATE.matrículas||[]).forEach(m=>{ if(m.curso&&!existingNames.has(m.curso)) missing.add(m.curso); });
     (STATE.pagosRegulares||[]).forEach(p=>{ if(p.curso&&!existingNames.has(p.curso)) missing.add(p.curso); });
     if(missing.size>0){
-      const archivados=STATE.cursosEliminados||[];
       missing.forEach(nombre=>{
-        let archivado=null;
-        for(let i=archivados.length-1;i>=0;i--){ if(archivados[i].nombre===nombre){ archivado=archivados[i]; break; } }
-        if(archivado){
-          const {_eliminadoAt,_eliminadoPor,_fromGrupo,...datos}=archivado;
-          STATE.cursos.push({...datos, id:datos.id||uid(), grupos:datos.grupos||[],
-            _recovered:true, _recoveredAt:new Date().toISOString(), _recoveredConDatos:true});
-        } else {
-          STATE.cursos.push({id:uid(),nombre,costoBase:'',tipo:'regular',
-            fechaInicio:null,fechaFin:null,grupos:[],
-            createdAt:new Date().toISOString(),_recovered:true});
-        }
+        STATE.cursos.push({id:uid(),nombre,costoBase:'',tipo:'regular',
+          fechaInicio:null,fechaFin:null,grupos:[],
+          createdAt:new Date().toISOString(),_recovered:true});
       });
       console.warn('Auto-recuperados cursos faltantes:',[...missing]);
     }
@@ -1260,8 +1248,8 @@ function buildSidebar(){
 }
 function pendingPayments(){
   const cm=monthStr();
-  const pagados=new Set(STATE.pagosRegulares.filter(p=>p.meses&&p.meses.includes(cm)).map(p=>p.crmFolio)); // FIX: por folio
-  return STATE.matrículas.filter(m=>!pagados.has(m.folio)).length||0;
+  const pagados=new Set(STATE.pagosRegulares.filter(p=>p.meses&&p.meses.includes(cm)).map(p=>p.alumnoNombre));
+  return STATE.matrículas.filter(m=>!pagados.has(m.alumno)).length||0;
 }
 const VIEWS={dashboard:renderDashboard,matriculas:renderMatriculas,pagos:renderPagos,alumnos:renderAlumnos,cursos:renderCursos,usuarios:renderUsuarios,proyeccion:renderProyeccion,inactivos:renderInactivos,dios:renderModoDios,maestros:renderMaestros,clases:renderClasesInstructor,cursos_inst:renderCursosInstructor,horarios:renderHorarios,horarios_admin:renderHorariosAdmin,asistencias_admin:renderAsistenciasAdmin};
 function navigate(tab){
@@ -1304,21 +1292,14 @@ function dateOverlap(fi1,ff1,fi2,ff2){
 }
 
 // Returns conflict description or null
-function checkScheduleConflict(salon, desde, hasta, fechaIni, fechaFin, excludeCursoId, excludeGrupoId, dia, excludeNombre){
+function checkScheduleConflict(salon, desde, hasta, fechaIni, fechaFin, excludeCursoId, excludeGrupoId, dia){
   if(!salon||!desde||!hasta) return null;
   // excludeCursoId puede ser un único id o un array de ids a excluir
   // (necesario cuando un curso existente se convierte en grupo: hay que
   // excluir tanto el curso padre como el curso original del que se tomó el grupo)
   const excludeIds = Array.isArray(excludeCursoId) ? excludeCursoId.filter(Boolean) : (excludeCursoId?[excludeCursoId]:[]);
-  // excludeNombre: respaldo por NOMBRE además del ID — protege contra desincronización
-  // de IDs (p.ej. si Firebase resincroniza STATE.cursos mientras el modal de edición
-  // está abierto y el curso original termina con un id distinto al capturado en
-  // _originalCursoId). Como los nombres de curso son únicos en el sistema, excluir
-  // por nombre es seguro y evita falsos conflictos al migrar un curso existente a grupo.
-  const excludeNombres = Array.isArray(excludeNombre) ? excludeNombre.filter(Boolean) : (excludeNombre?[excludeNombre]:[]);
   for(const c of STATE.cursos){
     if(excludeIds.includes(c.id)) continue;
-    if(excludeNombres.includes(c.nombre)) continue;
     const grupos = c.grupos&&c.grupos.length ? c.grupos : [{
       id:'_main',salon:c.salon,horarioDesde:c.horarioDesde||'',horarioHasta:c.horarioHasta||'',
       fechaInicio:c.fechaInicio,fechaFin:c.fechaFin,nombre:c.nombre,dia:c.dia||''
@@ -1819,8 +1800,8 @@ function renderDashboard(){
   const esteMes=mats.filter(m=>{const d=new Date(m.fechaISO||Date.now());return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).length;
   const pagosMes=pagosR.filter(p=>(p.meses&&p.meses.includes(cm))||(p.fechaISO&&p.fechaISO.startsWith(cm))||(p.fecha&&p.fecha.includes(cm.split('-')[1])));
   const ingresosPagosMes=pagosMes.reduce((s,p)=>s+(p.montoFinal||0),0);
-  const alumnosPagadosMes=new Set(pagosMes.map(p=>p.crmFolio)).size; // FIX: contar por folio (contrato), no por nombre de alumno
-  const alumnosPendientes=mats.filter(m=>!pagosMes.some(p=>p.crmFolio===m.folio)).length; // FIX: por folio, no por nombre (2 matrículas pueden compartir alumno)
+  const alumnosPagadosMes=new Set(pagosMes.map(p=>p.alumnoNombre)).size;
+  const alumnosPendientes=mats.filter(m=>!pagosMes.some(p=>p.alumnoNombre===m.alumno)).length;
   const promoActiva=promos.filter(p=>p.activa&&p.fechaFin>=cm).length;
 
   const porCurso=(STATE.cursos||[]).map(c=>({
@@ -1954,7 +1935,7 @@ function _renderMatTable(){
     +'<th style="width:80px"></th>'
     +'</tr></thead><tbody>'
     +list.map(function(m){
-      var pMes=STATE.pagosRegulares.filter(function(p){return p.crmFolio===m.folio&&p.meses&&p.meses.includes(cm);}); // FIX: por folio, no por nombre
+      var pMes=STATE.pagosRegulares.filter(function(p){return p.alumnoNombre===m.alumno&&p.meses&&p.meses.includes(cm);});
       var pagadoMes=pMes.length>0;
       var pagosMesStr=pMes.map(function(p){return'$'+(p.monto||0).toLocaleString('es-MX');}).join(', ')||'';
       var PM=fmtMXN(parseFloat(String((m.pagoMensual!=null?m.pagoMensual:m.primerPago)||0).replace(/[^0-9.]/g,'')));
@@ -2194,7 +2175,7 @@ function getSchedulePagos(m, maxMeses){
   if(m.pagoTipo==='unico') maxMeses=1; // pago único: solo 1 fecha
   if(maxMeses==null) maxMeses=6; // null/undefined → 6 por defecto (0 es un valor válido explícito, no se sobreescribe)
   var pagados=(STATE.pagosRegulares||[])
-    .filter(function(p){return Number(p.crmFolio)===Number(m.folio)||(p.paqueteFolios&&p.paqueteFolios.indexOf(m.folio)>=0);})
+    .filter(function(p){return p.crmFolio==m.folio||(p.paqueteFolios&&p.paqueteFolios.indexOf(m.folio)>=0);})
     .reduce(function(s,p){(p.meses||[]).forEach(function(mes){s[mes]=true;});return s;},{});
   var result=[];
   var startD=new Date(m.fechaISO+'T00:00:00');
@@ -2756,9 +2737,9 @@ function renderPagos(){
   if(!hasPerm('ver_pagos')){document.getElementById('main-content').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><h3>Sin acceso</h3></div>';return;}
   const cm=monthStr();
   const pagosMes=(STATE.pagosRegulares||[]).filter(p=>p.meses&&p.meses.includes(cm));
-  const alumnosPagados=new Set(pagosMes.map(p=>p.crmFolio)).size; // FIX: por folio
-  const pending=(STATE.matrículas||[]).filter(m=>!pagosMes.some(p=>p.crmFolio===m.folio)).length; // FIX: por folio, no por nombre
-  // Segmentación nuevos vs anteriores: folio cuya inscripción fue ESTE mes
+  const alumnosPagados=new Set(pagosMes.map(p=>p.crmFolio)).size;
+  const pending=(STATE.matrículas||[]).filter(m=>!pagosMes.some(p=>p.crmFolio===m.folio)).length;
+  // Segmentación nuevos vs anteriores
   const _folioNuevosPag=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>m.folio));
   const _pagosAnt=pagosMes.filter(p=>!_folioNuevosPag.has(p.crmFolio));
   const _pagosNvo=pagosMes.filter(p=>_folioNuevosPag.has(p.crmFolio));
@@ -2774,13 +2755,13 @@ function renderPagos(){
     ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="diagnosticoPagos()" title="Audita todas las matrículas en busca de inconsistencias"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</button>':''}
   </div>
   <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
-    <div class="stat-card" style="--stripe:var(--green)"><div class="stat-label">Contratos al corriente</div><div class="stat-val">${STATE.matrículas.length-pending}</div><div class="stat-sub">de ${STATE.matrículas.length} alumnos</div></div>
+    <div class="stat-card" style="--stripe:var(--green)"><div class="stat-label">Contratos al corriente</div><div class="stat-val">${(STATE.matrículas||[]).length-pending}</div><div class="stat-sub">de ${(STATE.matrículas||[]).length} alumnos</div></div>
     <div class="stat-card" style="--stripe:var(--danger)"><div class="stat-label">${t('pag_pendientes_stat')}</div><div class="stat-val">${pending}</div><div class="stat-sub">${t('pag_sin_pago')}</div></div>
     <div class="stat-card" style="--stripe:#6366f1"><div class="stat-label">${t('pag_ingresos')}</div><div class="stat-val" style="font-size:18px">${fmtMXN(pagosMes.reduce((s,p)=>s+(p.montoFinal||0),0))}</div><div class="stat-sub">${pagosMes.length} pago${pagosMes.length===1?'':'s'} registrado${pagosMes.length===1?'':'s'}</div></div>
     <div class="stat-card" style="--stripe:var(--warn)"><div class="stat-label">${t('pag_promos')}</div><div class="stat-val">${STATE.promociones.filter(p=>p.activa&&p.fechaFin>=cm).length}</div><div class="stat-sub">disponibles para aplicar</div></div>
   </div>
-  <!-- ── Desglose financiero: anteriores vs nuevos ── -->
-  <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 20px;margin-bottom:16px;display:flex;gap:0;flex-wrap:wrap;align-items:stretch" class="fade-in">
+  <!-- Desglose financiero: anteriores vs nuevos -->
+  <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 20px;margin-bottom:16px;display:flex;gap:0;flex-wrap:wrap;align-items:stretch">
     <div style="flex:1;min-width:150px;padding-right:20px">
       <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Alumnos anteriores</div>
       <div style="font-size:20px;font-weight:700;font-family:'DM Mono',monospace;color:var(--text)">${fmtMXN(_montoAnt)}</div>
@@ -2804,7 +2785,6 @@ function renderPagos(){
     <button class="tab-btn${pagoSubTab==='historial'?' active':''}" data-tab="historial" onclick="switchPagoTab('historial')"><i class="ti ti-list"></i> ${t('pag_tab_historial')}</button>
     <button class="tab-btn${pagoSubTab==='masivo'?' active':''}" data-tab="masivo" onclick="switchPagoTab('masivo')"><i class="ti ti-cash-banknote"></i> Pago Masivo</button>
     <button class="tab-btn${pagoSubTab==='pendientes'?' active':''}" data-tab="pendientes" onclick="switchPagoTab('pendientes')"><i class="ti ti-user-exclamation"></i> ${t('pag_tab_pendientes')} ${pending>0?`<span class="sn-badge" style="background:var(--danger);margin-left:4px">${pending}</span>`:''}</button>
-
   </div>
   <div id="pago-content"></div>`;
   renderPagoTab();
@@ -3417,31 +3397,23 @@ async function guardarPago(){
 function limpiarFormPago(){selectedMeses=[];selectedMethod='';renderPagoTab();}
 
 // ── Historial ──────────────────────────────────
-function _fechaSortKey(p){ return p.fechaISO||p.fecha||''; } // FIX: normaliza ambos formatos de fecha
-function _fechaDisplay(p){                                          // Muestra siempre DD/MM/YYYY sin importar cómo está guardada
+function _fechaSortKey(p){ return p.fechaISO||p.fecha||''; }
+function _fechaDisplay(p){
   const iso=p.fechaISO||p.fecha||'';
-  if(!iso||iso.includes(' ')||iso.includes('de')) return iso;       // formato humano legacy → mostrarlo tal cual
+  if(!iso||iso.includes(' ')||iso.includes('de')) return iso;
   const[y,m,d]=iso.split('-');
   return d&&m&&y?`${d}/${m}/${y}`:iso;
 }
 function buildHistorialPagos(){
   const cm=monthStr();
   const _folioNvosH=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>m.folio));
-  // FIX: ordenar siempre por fechaISO (campo ISO puro) cuando existe, sino por fecha — evita mezclar
-  // formato "2026-06-15" de guardarPago individual con "15 de junio de 2026" de guardarPagoMasivo
   const todosSinFiltro=[...(STATE.pagosRegulares||[])].sort((a,b)=>_fechaSortKey(b).localeCompare(_fechaSortKey(a)));
   if(todosSinFiltro.length===0)return`<div class="empty"><div class="empty-icon">📄</div><h3>${t('pag_hist_sin')}</h3><p>${t('pag_hist_sin_sub')}</p></div>`;
-  // Búsqueda: filtra por alumno, curso, folio, método, mes cubierto o nota
   const q=(_historialQ||'').toLowerCase();
   const todos=q?todosSinFiltro.filter(p=>{
     const folio=String(p.crmFolio||'');
     const mesesStr=(p.meses||[]).map(m=>mesLabel(m)).join(' ').toLowerCase();
-    return (p.alumnoNombre||'').toLowerCase().includes(q)
-      ||(p.curso||'').toLowerCase().includes(q)
-      ||folio.includes(q)
-      ||(p.method||'').toLowerCase().includes(q)
-      ||mesesStr.includes(q)
-      ||(p.notas||'').toLowerCase().includes(q);
+    return (p.alumnoNombre||'').toLowerCase().includes(q)||(p.curso||'').toLowerCase().includes(q)||folio.includes(q)||(p.method||'').toLowerCase().includes(q)||mesesStr.includes(q)||(p.notas||'').toLowerCase().includes(q);
   }):todosSinFiltro;
   const methodBadge=m=>m==='cash'?'<span class="badge badge-cash">💵 Efectivo</span>':m==='transfer'?'<span class="badge badge-transfer">🏦 Transferencia</span>':'<span class="badge badge-card">💳 Terminal MP</span>';
   const pagosMesH=todosSinFiltro.filter(p=>p.meses&&p.meses.includes(cm));
@@ -3498,12 +3470,9 @@ function buildHistorialPagos(){
 }
 
 function showModalEditarPago(id){
-  const p=STATE.pagosRegulares.find(x=>x.id===id);
+  const p=(STATE.pagosRegulares||[]).find(x=>x.id===id);
   if(!p){alert('Pago no encontrado.');return;}
-  // Fecha para el input: necesita formato YYYY-MM-DD (ISO puro)
-  const fechaISO=p.fechaISO||p.fecha||'';
-  const fechaInput=fechaISO&&!fechaISO.includes(' ')&&!fechaISO.includes('de')
-    ?fechaISO:(todayISO());
+  const fechaInput=p.fechaISO||(p.fecha&&!p.fecha.includes(' ')&&!p.fecha.includes('de')?p.fecha:todayISO());
   document.getElementById('modal-container').innerHTML=`
   <div class="moverlay">
   <div class="modal" style="max-width:520px">
@@ -3540,13 +3509,13 @@ function showModalEditarPago(id){
         </div>
       </div>
       <div style="margin-top:12px">
-        <label style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:4px;display:block">Notas / observaciones</label>
+        <label style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:4px;display:block">Notas</label>
         <input id="ep-notas" type="text" value="${esc(p.notas||'')}" placeholder="Opcional"
           style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text)">
       </div>
-      <div id="ep-preview" style="margin-top:12px;padding:8px 12px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--text3)">
+      <div style="margin-top:12px;padding:8px 12px;background:var(--surface2);border-radius:8px;font-size:12px;color:var(--text3)">
         Neto estimado: <strong id="ep-neto-val" class="monto-tag">${fmtMXN(p.neto||p.montoFinal||0)}</strong>
-        (si Método=Terminal MP: se descuenta 3.5% + 16% IVA sobre comisión)
+        (Terminal MP descuenta 3.5% + IVA)
       </div>
     </div>
     <div style="display:flex;gap:10px;justify-content:flex-end;padding:14px;border-top:1px solid var(--border)">
@@ -3554,7 +3523,6 @@ function showModalEditarPago(id){
       <button class="btn-primary" onclick="guardarEdicionPago('${esc(id)}')"><i class="ti ti-device-floppy"></i> Guardar cambios</button>
     </div>
   </div></div>`;
-  // Live preview del neto
   function updateNeto(){
     const monto=parseFloat(document.getElementById('ep-monto')?.value)||0;
     const method=document.getElementById('ep-method')?.value;
@@ -3568,7 +3536,7 @@ function showModalEditarPago(id){
 }
 
 async function guardarEdicionPago(id){
-  const idx=STATE.pagosRegulares.findIndex(x=>x.id===id);
+  const idx=(STATE.pagosRegulares||[]).findIndex(x=>x.id===id);
   if(idx===-1){alert('Pago no encontrado.');return;}
   const fechaRaw=(document.getElementById('ep-fecha')?.value||'').trim();
   const method=(document.getElementById('ep-method')?.value||'cash').trim();
@@ -3577,23 +3545,32 @@ async function guardarEdicionPago(id){
   const notas=(document.getElementById('ep-notas')?.value||'').trim();
   if(!fechaRaw){alert('La fecha es obligatoria.');return;}
   if(monto<=0){alert('El monto debe ser mayor a 0.');return;}
-  // Recalcular comisión según método
   let commMP=0,ivaMP=0,neto=monto;
   if(method==='card'){commMP=+(monto*0.035).toFixed(2);ivaMP=+(commMP*0.16).toFixed(2);neto=+(monto-commMP-ivaMP).toFixed(2);}
   const pago=STATE.pagosRegulares[idx];
-  STATE.pagosRegulares[idx]={
-    ...pago,
-    fecha:fechaRaw,     // guardar en formato YYYY-MM-DD (el input[type=date] devuelve siempre ISO)
-    fechaISO:fechaRaw,  // también actualizar fechaISO para ordenar correctamente
-    method,montoFinal:monto,commMP,ivaMP,neto,
-    notas,
+  STATE.pagosRegulares[idx]={...pago,fecha:fechaRaw,fechaISO:fechaRaw,method,montoFinal:monto,commMP,ivaMP,neto,notas,
     ...(mesosRaw.length>0?{meses:mesosRaw,mesesCount:mesosRaw.length}:{}),
-    editadoEn:new Date().toISOString(),editadoPor:currentUser?.username||''
-  };
+    editadoEn:new Date().toISOString(),editadoPor:currentUser?.username||''};
   await saveState();
   closeModal();
-  _historialQ=''; // limpiar búsqueda al editar para ver el resultado en contexto
+  _historialQ='';
   renderPagoTab();
+}
+
+async function limpiarPagosHuerfanosCRM(){
+  if(!hasPerm('modo_dios')){alert('Solo el Modo Dios puede usar esta función.');return;}
+  const foliosValidos=new Set((STATE.matrículas||[]).map(m=>m.folio));
+  const huerfanos=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio!=null&&!foliosValidos.has(p.crmFolio));
+  if(huerfanos.length===0){alert('✅ No hay pagos huérfanos. Todos los pagos tienen matrícula activa.');return;}
+  const detalles=huerfanos.map(p=>`Folio #${p.crmFolio} — ${p.alumnoNombre||'(sin nombre)'} — ${(p.meses||[]).join(', ')} — ${fmtMXN(p.montoFinal||0)}`).join('\n');
+  if(!confirm(`🗑️ Eliminar ${huerfanos.length} pago${huerfanos.length===1?'':'s'} huérfano${huerfanos.length===1?'':'s'} de CRM?\n\n${detalles}\n\nContabilidad los eliminará automáticamente en el siguiente ciclo de sincronización.\n\nEsta acción NO se puede deshacer.`))return;
+  const foliosH=new Set(huerfanos.map(p=>p.crmFolio));
+  STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(p=>!foliosH.has(p.crmFolio));
+  await saveState();
+  closeModal();
+  renderPagos();
+  buildSidebar();
+  setTimeout(()=>alert(`✅ Eliminados ${huerfanos.length} pago${huerfanos.length===1?'':'s'} huérfano${huerfanos.length===1?'':'s'}. Recarga Contabilidad para ver los cambios.`),200);
 }
 
 async function eliminarPago(id){
@@ -3605,43 +3582,23 @@ async function eliminarPago(id){
 // ── Pendientes ─────────────────────────────────
 function buildPendientes(){
   const cm=monthStr();
-  const pagosMes=(STATE.pagosRegulares||[]).filter(p=>p.meses&&p.meses.includes(cm));
-  const pagados=new Set(pagosMes.map(p=>p.crmFolio)); // FIX: por folio, no por nombre
-  const pendientes=(STATE.matrículas||[]).filter(m=>!pagados.has(m.folio));
+  const pagosMes=STATE.pagosRegulares.filter(p=>p.meses&&p.meses.includes(cm));
+  const pagados=new Set(pagosMes.map(p=>p.alumnoNombre));
+  const pendientes=STATE.matrículas.filter(m=>!pagados.has(m.alumno));
   if(pendientes.length===0)return`<div class="empty"><div class="empty-icon">🎉</div><h3>¡Todos pagaron!</h3><p>${t('pag_pend_vacia_sub')} ${mesLabel(cm)}</p></div>`;
-  // Separar pendientes: anteriores (base mínima garantizada) vs nuevos este mes
-  const folioNuevos=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>m.folio));
-  const pendAnt=pendientes.filter(m=>!folioNuevos.has(m.folio));
-  const pendNvo=pendientes.filter(m=>folioNuevos.has(m.folio));
-  const filasPend=group=>`${group.map(m=>`<tr>
+  return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong>:</div>
+  <div class="table-wrap fade-in"><table>
+    <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
+    <tbody>
+    ${pendientes.map(m=>`<tr>
       <td style="font-weight:600">${m.alumno}</td>
       <td><span class="folio-tag">#${m.folio}</span></td>
       <td><span class="badge badge-admin">${m.curso}</span></td>
       <td style="font-size:12px;color:var(--text2)">${m.email||'—'}</td>
       <td><button class="btn-green btn-sm" onclick="precargarPago(${m.folio})"><i class="ti ti-cash"></i> ${t('pag_reg_pago')}</button></td>
-    </tr>`).join('')}`;
-  const tablaBase=`<div class="table-wrap fade-in"><table>
-    <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
-    <tbody>${filasPend(pendientes)}</tbody></table></div>`;
-  // Cuando hay mezcla de anteriores y nuevos, separarlos visualmente
-  if(pendAnt.length>0&&pendNvo.length>0){
-    return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong> — ${pendientes.length} total:</div>
-    <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Alumnos anteriores (${pendAnt.length})</div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Estos son el ingreso base mínimo esperado del mes.</div>
-    <div class="table-wrap fade-in"><table>
-      <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
-      <tbody>${filasPend(pendAnt)}</tbody></table></div>
-    <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">🆕 Nuevos inscritos este mes (${pendNvo.length})</div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">Se inscribieron este mes, pendientes de registrar primer pago.</div>
-    <div class="table-wrap fade-in"><table>
-      <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
-      <tbody>${filasPend(pendNvo)}</tbody></table></div>`;
-  }
-  // Si todos son del mismo tipo, tabla única con etiqueta apropiada
-  const label=pendNvo.length===pendientes.length
-    ?`${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong> — 🆕 todos son nuevos inscritos este mes:`
-    :`${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong>:`;
-  return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${label}</div>${tablaBase}`;
+    </tr>`).join('')}
+    </tbody>
+  </table></div>`;
 }
 
 function precargarPago(folio){
@@ -3806,32 +3763,12 @@ function _renderAlumnosCards(){
   var q=(_alumnosQ||'').toLowerCase();
   var cm=monthStr();
   var seen={};
-  var todos=(STATE.matrículas||[]).slice().sort(function(a,b){return (a.alumno||'').localeCompare(b.alumno||'');});
+  var todos=STATE.matrículas.slice().sort(function(a,b){return (a.alumno||'').localeCompare(b.alumno||'');});
   var alumnos=[];
   todos.forEach(function(m){if(!seen[m.alumno]){seen[m.alumno]=true;alumnos.push(m);}});
   var pagados=new Set((STATE.pagosRegulares||[]).filter(function(p){
     return (p.meses&&p.meses.includes(cm))||(p.fechaISO&&p.fechaISO.startsWith(cm));
-  }).map(function(p){return p.crmFolio;})); // FIX: por folio, no por nombre
-  // FIX: un alumno puede tener VARIAS matrículas (varios cursos, o una reinscripción con
-  // folio nuevo). Antes solo se revisaba el pago de LA PRIMERA matrícula encontrada (la
-  // que sobrevive la deduplicación por nombre), ignorando las demás — por eso una tarjeta
-  // podía decir "Pendiente" aunque el alumno sí hubiera pagado, simplemente porque el pago
-  // quedó registrado bajo OTRO folio suyo. Ahora se revisan TODAS sus matrículas: si
-  // cualquiera de ellas sigue sin cubrirse, la tarjeta marca "Pendiente"; si están todas
-  // cubiertas (pago este mes, o liquidadas si son de pago único), marca "Pagó".
-  var folioTieneAlgunPago=new Set((STATE.pagosRegulares||[]).map(function(p){return p.crmFolio;}));
-  // Identificar folios de matrículas inscritas ESTE mes
-  var folioNuevosAlm=new Set((STATE.matrículas||[]).filter(function(m){return m.fechaISO&&m.fechaISO.startsWith(cm);}).map(function(m){return m.folio;}));
-  function matriculaCubierta(x){
-    if(x.pagoTipo==='unico'){
-      return folioTieneAlgunPago.has(x.folio) || (!x.autorizacionPendiente && (x.primerPago||0)>0);
-    }
-    return pagados.has(x.folio);
-  }
-  // Un alumno es "nuevo este mes" si CUALQUIERA de sus matrículas es nueva este mes
-  function esNuevoEsteMes(nombre){
-    return (STATE.matrículas||[]).some(function(x){return x.alumno===nombre&&folioNuevosAlm.has(x.folio);});
-  }
+  }).map(function(p){return p.alumnoNombre;}));
   if(q) alumnos=alumnos.filter(function(m){
     return m.alumno.toLowerCase().includes(q)
       ||(m.titular||'').toLowerCase().includes(q)
@@ -3842,37 +3779,15 @@ function _renderAlumnosCards(){
     el.innerHTML='<div class="empty"><div class="empty-icon">🎓</div><h3>'+t('alm_sin_alumnos')+'</h3></div>';
     return;
   }
-  // Barra de resumen: totales globales (antes del filtro de búsqueda)
-  var nTotal=alumnos.length;
-  var nNuevosAlm=alumnos.filter(function(m){return esNuevoEsteMes(m.alumno);}).length;
-  var nAnteriores=nTotal-nNuevosAlm;
-  var resumenBar=nNuevosAlm>0
-    ?('<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 16px;margin-bottom:10px;display:flex;gap:20px;font-size:12px;flex-wrap:wrap;align-items:center">'
-      +'<span style="color:var(--text2)"><strong style="color:var(--text)">'+nTotal+'</strong> alumno'+(nTotal===1?'':'s')+(q?' encontrado'+(nTotal===1?'':'s'):'')+'</span>'
-      +'<span style="color:var(--text3)">|</span>'
-      +'<span style="color:var(--text2)">Anteriores: <strong style="color:var(--text)">'+nAnteriores+'</strong></span>'
-      +'<span style="color:var(--text3)">|</span>'
-      +'<span style="color:var(--accent);font-weight:700">🆕 Nuevos este mes: <strong>'+nNuevosAlm+'</strong></span>'
-      +'</div>')
-    :('<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 16px;margin-bottom:10px;font-size:12px;color:var(--text2)">'
-      +'<strong style="color:var(--text)">'+nTotal+'</strong> alumno'+(nTotal===1?'':'s')+(q?' encontrado'+(nTotal===1?'':'s'):'')
-      +'</div>');
-  el.innerHTML=resumenBar
-    +'<div style="display:flex;flex-direction:column;gap:10px">'
+  el.innerHTML='<div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">'
     +alumnos.map(function(m){
-      var misMatriculas=STATE.matrículas.filter(function(x){return x.alumno===m.alumno;});
-      var cursosCount=misMatriculas.length;
-      var pago=misMatriculas.every(matriculaCubierta); // FIX: TODAS sus matrículas, no solo una
-      var esNuevo=esNuevoEsteMes(m.alumno);
+      var cursosCount=STATE.matrículas.filter(function(x){return x.alumno===m.alumno;}).length;
+      var pago=pagados.has(m.alumno);
       var ini=m.alumno.charAt(0).toUpperCase();
-      // Borde especial para alumnos nuevos este mes
-      var cardBorder=esNuevo?'border:1.5px solid var(--accent)':'border:1px solid var(--border)';
-      return '<div style="background:var(--surface);'+cardBorder+';border-radius:12px;padding:16px;display:flex;align-items:center;gap:14px">'
-        +'<div style="width:46px;height:46px;border-radius:50%;background:'+(esNuevo?'var(--accent)':'var(--accent)')+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;flex-shrink:0">'+ini+'</div>'
+      return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;align-items:center;gap:14px">'
+        +'<div style="width:46px;height:46px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;flex-shrink:0">'+ini+'</div>'
         +'<div style="flex:1;min-width:0">'
-        +'<div style="font-weight:700;font-size:14px;margin-bottom:2px">'+esc(m.alumno)
-          +(esNuevo?' <span style="font-size:9px;background:var(--accent);color:#fff;border-radius:4px;padding:1px 6px;vertical-align:middle;font-weight:700">🆕 NUEVO</span>':'')
-        +'</div>'
+        +'<div style="font-weight:700;font-size:14px;margin-bottom:2px">'+esc(m.alumno)+'</div>'
         +'<div style="font-size:12px;color:var(--text3)">'+esc(m.curso)+(cursosCount>1?' + '+(cursosCount-1)+' más':'')+'</div>'
         +(m.email?'<div style="font-size:11px;color:var(--text3);margin-top:2px">'+esc(m.email)+'</div>':'')
         +'</div>'
@@ -4438,11 +4353,10 @@ function updateGrupoConflict(idx, field, val) {
   const c = STATE.cursos.find(x=>x.nombre===nombreOriginal);
   // Excluir el curso padre Y el curso original si este grupo viene de un curso existente
   const excludeIds = [c?.id||null, g._originalCursoId||null];
-  const excludeNombres = g.nombre ? [g.nombre] : [];
   const conflict = checkScheduleConflict(
     g.salon, g.horarioDesde, g.horarioHasta,
     g.fechaInicio, g.fechaFin,
-    excludeIds, g.id||null, g.dia, excludeNombres
+    excludeIds, g.id||null, g.dia
   );
   const alertEl = document.getElementById('conflict-'+idx);
   if(alertEl){
@@ -4507,15 +4421,7 @@ async function removeModalGrupo(idx) {
   const g = _modalGrupos[idx];
   if(!g) return;
 
-  // FIX: un grupo se trata como "viene de un curso existente" si tiene la marca
-  // _fromCurso/_originalCursoId O si hay matrículas/pagos que todavía referencian
-  // su nombre como curso — esto cubre grupos huérfanos (de un intento previo que
-  // quedó sin la marca) para que NUNCA se borren de forma permanente sin avisar,
-  // ya que podrían representar alumnos reales inscritos.
-  const tieneDatosReferenciados = (STATE.matrículas||[]).some(function(m){return m.curso===g.nombre;})
-    || (STATE.pagosRegulares||[]).some(function(p){return p.curso===g.nombre;});
-
-  if(g._fromCurso || g._originalCursoId || tieneDatosReferenciados) {
+  if(g._fromCurso || g._originalCursoId) {
     // ── Grupo creado DESDE UN CURSO EXISTENTE → restaurar como curso independiente
     const ok = confirm(
       '⚠️ "' + g.nombre + '" fue agregado desde un curso existente.\n\n' +
@@ -4525,13 +4431,11 @@ async function removeModalGrupo(idx) {
     );
     if(!ok) return;
 
-    // Restaurar el curso solo si no existe ya un curso con ese ID O con ese NOMBRE
-    // (antes solo se revisaba por ID, lo que permitía crear un curso standalone
-    // DUPLICADO si ya existía uno con el mismo nombre pero distinto id)
+    // Restaurar el curso solo si no existe ya un curso con ese ID
     const existePorId = STATE.cursos.find(c => c.id === (g._originalCursoId || g.id));
-    const existePorNombre = STATE.cursos.find(c => c.nombre === g.nombre);
+    const existePorNombre = STATE.cursos.find(c => c.nombre === g.nombre && c.grupos && c.grupos.length === 0);
 
-    if(!existePorId && !existePorNombre) {
+    if(!existePorId) {
       // Reconstruir el curso desde los datos del grupo
       const cursoRestaurado = {
         id:    g._originalCursoId || g.id || uid(),
@@ -4552,8 +4456,6 @@ async function removeModalGrupo(idx) {
         restoradoDeGrupo: true,
       };
       STATE.cursos.push(cursoRestaurado);
-      // Reasignar matrículas/pagos huérfanos de vuelta a este curso restaurado
-      (STATE.matrículas||[]).forEach(function(m){ if(m.curso===g.nombre) m.grupoId=null; });
       await saveState();
       alert('✅ "' + g.nombre + '" restaurado como curso independiente.\nPuedes encontrarlo en la pestaña Cursos.');
     } else {
@@ -4561,21 +4463,14 @@ async function removeModalGrupo(idx) {
     }
 
   } else {
-    // ── Grupo creado MANUALMENTE (nuevo grupo, sin matrículas/pagos asociados) →
-    //    eliminar definitivamente. Solo se llega aquí si de verdad no hay ningún
-    //    dato (alumno o pago) que dependa de este grupo.
+    // ── Grupo creado MANUALMENTE (nuevo grupo) → eliminar definitivamente
     const ok = confirm(
       '🗑️ ¿Eliminar el grupo "' + g.nombre + '" definitivamente?\n\n' +
-      'Este grupo fue creado como grupo nuevo dentro de este curso y no tiene ' +
-      'alumnos ni pagos asociados. Al eliminarlo se perderá toda su configuración.\n\n' +
+      'Este grupo fue creado como grupo nuevo dentro de este curso. ' +
+      'Al eliminarlo se perderá toda su configuración.\n\n' +
       'Esta acción NO se puede deshacer.'
     );
     if(!ok) return;
-    // Archivar de todas formas (con todos sus datos) por si acaso — recuperar
-    // de más nunca duplica nada, ya que confirmarRecuperacion() solo restaura
-    // cursos que ya no existen.
-    if(!STATE.cursosEliminados) STATE.cursosEliminados=[];
-    STATE.cursosEliminados.push({...g, _eliminadoAt:new Date().toISOString(), _eliminadoPor:currentUser?currentUser.username:'', _fromGrupo:true});
   }
 
   // Quitar del array y actualizar display
@@ -4622,12 +4517,8 @@ async function guardarCursoModal(nombreOriginal) {
       const c=STATE.cursos.find(x=>x.nombre===nombreOriginal);
       // Excluir el curso padre Y el curso original (si este grupo viene de un curso existente)
       const excludeIds=[c?.id||null, g._originalCursoId||null];
-      // Exclusión por nombre INCONDICIONAL (no solo si _fromCurso=true): cubre grupos
-      // huérfanos de un intento previo que coincide en nombre con un curso existente pero
-      // que por alguna razón quedó sin la marca _fromCurso/_originalCursoId.
-      const excludeNombres = g.nombre ? [g.nombre] : [];
       const conflict=checkScheduleConflict(g.salon,g.horarioDesde,g.horarioHasta,
-        g.fechaInicio||inicio,g.fechaFin||fin,excludeIds,g.id||null,g.dia||dia,excludeNombres);
+        g.fechaInicio||inicio,g.fechaFin||fin,excludeIds,g.id||null,g.dia||dia);
       if(conflict){
         alert(t('cur_grupo_conflicto')+'\nConflicto con: '+conflict);
         return;
@@ -4659,26 +4550,11 @@ async function guardarCursoModal(nombreOriginal) {
         createdAt:new Date().toISOString()});
     }
     // Update matriculas for courses converted to grupos
-    // Resolución por ID con respaldo por NOMBRE: si el id capturado en _originalCursoId
-    // quedó desincronizado (p.ej. por una resincronización de Firebase mientras el modal
-    // estaba abierto), se busca también por nombre exacto del curso original — los nombres
-    // de curso son únicos en el sistema, así que es una clave de respaldo segura.
-    // AUTOSANACIÓN: un grupo se trata como "convertido desde curso existente" si tiene
-    // la marca _fromCurso O si su nombre coincide con un curso standalone que sigue
-    // existiendo (cubre grupos huérfanos de un intento previo que quedó sin la marca).
-    const esConvertido = function(g){
-      if(g._fromCurso) return true;
-      return STATE.cursos.some(function(c){ return c.nombre!==parentNombreCheck && c.nombre===g.nombre; });
-    };
-    var parentNombreCheck = nombre;
-    const gruposConvertidos = _modalGrupos.filter(esConvertido);
-    const convertedIds = gruposConvertidos.map(g=>g._originalCursoId||g.id);
-    const convertedNombres = gruposConvertidos.map(g=>g.nombre).filter(Boolean);
+    const convertedIds = _modalGrupos.filter(g=>g._fromCurso).map(g=>g._originalCursoId||g.id);
     const parentNombre = nombre; // the new parent course name
   
-    gruposConvertidos.forEach(function(g){
-      const originalCurso = STATE.cursos.find(c=>c.id===(g._originalCursoId||g.id))
-                          || STATE.cursos.find(c=>c.nombre===g.nombre); // respaldo por nombre
+    _modalGrupos.filter(g=>g._fromCurso).forEach(function(g){
+      const originalCurso = STATE.cursos.find(c=>c.id===(g._originalCursoId||g.id));
       if(!originalCurso) return;
       const originalNombre = originalCurso.nombre;
       // Update all matriculas that referenced the original course
@@ -4695,9 +4571,8 @@ async function guardarCursoModal(nombreOriginal) {
     });
   
     // Remove the original standalone courses that were converted
-    // (excluye por id Y por nombre para cubrir el mismo caso de desincronización)
-    if(convertedIds.length>0 || convertedNombres.length>0){
-      STATE.cursos=STATE.cursos.filter(c=>c.nombre===parentNombre || (!convertedIds.includes(c.id) && !convertedNombres.includes(c.nombre)));
+    if(convertedIds.length>0){
+      STATE.cursos=STATE.cursos.filter(c=>!convertedIds.includes(c.id));
     }
   // Auto-aplicar promociones vigentes del curso a los grupos nuevos
   var cursoCorrecto=STATE.cursos.find(function(c){return c.nombre===nombre;});
@@ -4738,17 +4613,10 @@ async function guardarCursoModal(nombreOriginal) {
 // OLD guardarCurso removed
 
 async function eliminarCurso(nombre){
-  const inscritos=(STATE.matrículas||[]).filter(m=>m.curso===nombre).length;
+  const inscritos=STATE.matrículas.filter(m=>m.curso===nombre).length;
   if(inscritos>0&&!confirm(`Este curso tiene ${inscritos} alumno(s) inscrito(s).\n¿Eliminar de todas formas?`))return;
   else if(inscritos===0&&!confirm(`¿Eliminar el curso "${nombre}"?`))return;
-  // Archivar el curso COMPLETO antes de borrarlo, para poder recuperarlo con todos
-  // sus datos (horario, costo, salón, instructor, etc.) más adelante, no solo el nombre.
-  const cursoActual = (STATE.cursos||[]).find(c=>c.nombre===nombre);
-  if(cursoActual){
-    if(!STATE.cursosEliminados) STATE.cursosEliminados=[];
-    STATE.cursosEliminados.push({...cursoActual, _eliminadoAt:new Date().toISOString(), _eliminadoPor:currentUser?currentUser.username:''});
-  }
-  STATE.cursos=(STATE.cursos||[]).filter(c=>c.nombre!==nombre);
+  STATE.cursos=STATE.cursos.filter(c=>c.nombre!==nombre);
   await saveState();renderCursos();
 }
 
@@ -5589,16 +5457,13 @@ async function darDeBaja(folio) {
 
 async function eliminarMatriculaPermanente(folio) {
   const m=STATE.matrículas.find(x=>x.folio===folio);
-  // FIX: verificar si hay pagos registrados para este folio (igual que hace la versión masiva)
   const pagosDelFolio=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio===folio);
   let msg=t('baja_elim_confirm')+(m?.alumno||'')+'?';
   if(pagosDelFolio.length>0){
-    msg+='\n\n🔴 ATENCIÓN: Esta matrícula tiene '+pagosDelFolio.length+' pago'+(pagosDelFolio.length!==1?'s':'')+' registrado'+(pagosDelFolio.length!==1?'s':'')+' ('+pagosDelFolio.map(p=>(p.meses||[]).join(', ')).join(' | ')+').\nAl eliminar la matrícula, esos pagos también se borrarán del CRM y se eliminarán de Contabilidad automáticamente.';
+    msg+='\n\n🔴 ATENCIÓN: Esta matrícula tiene '+pagosDelFolio.length+' pago'+(pagosDelFolio.length!==1?'s':'')+' registrado'+(pagosDelFolio.length!==1?'s':'')+' ('+pagosDelFolio.map(p=>(p.meses||[]).join(', ')).join(' | ')+').\nAl eliminar la matrícula, esos pagos también se borrarán del CRM y de Contabilidad automáticamente.';
   }
   if(!confirm(msg))return;
   STATE.matrículas=STATE.matrículas.filter(x=>x.folio!==folio);
-  // FIX: borrar también los pagosRegulares del folio — si no se hace, quedan como
-  // "huérfanos invisibles" en CRM y Contabilidad nunca limpia el ingreso correspondiente.
   STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio!==folio);
   if(STATE.autorizacionesPago) STATE.autorizacionesPago=STATE.autorizacionesPago.filter(a=>a.folio!==folio||a.estado!=='pendiente');
   await saveState();
@@ -6416,16 +6281,6 @@ function agregarCursoComoGrupo(){
   if(!nombre) return;
   const c=STATE.cursos.find(x=>x.nombre===nombre);
   if(!c) return;
-  // FIX: evitar agregar un grupo duplicado si YA existe un grupo con ese nombre
-  // en _modalGrupos (p.ej. si el usuario hace doble clic, o lo intenta de nuevo
-  // tras un guardado que pareció fallar). Esto es lo que causaba que un curso
-  // existente terminara duplicado como 2 grupos hermanos dentro del mismo curso.
-  const yaExiste=_modalGrupos.some(function(gr){return (gr.nombre||'').trim().toLowerCase()===nombre.trim().toLowerCase();});
-  if(yaExiste){
-    alert('ℹ️ "'+nombre+'" ya está agregado como grupo. No se puede agregar dos veces.');
-    document.getElementById('curso-como-grupo-panel').style.display='none';
-    return;
-  }
   // Convert course to group
   _modalGrupos.push({
     id:uid(),              // new ID for the grupo
@@ -6450,42 +6305,35 @@ function agregarCursoComoGrupo(){
 
 async function recuperarCursos(){
   if(!hasPerm('modo_dios')){ alert('Solo el Modo Dios puede usar esta función.'); return; }
-  const existingNames=new Set((STATE.cursos||[]).map(c=>c.nombre).filter(Boolean));
+  const existingNames=new Set(STATE.cursos.map(c=>c.nombre).filter(Boolean));
   const missing=new Set();
-  (STATE.matrículas||[]).forEach(m=>{ if(m.curso&&!existingNames.has(m.curso)) missing.add(m.curso); });
-  (STATE.pagosRegulares||[]).forEach(p=>{ if(p.curso&&!existingNames.has(p.curso)) missing.add(p.curso); });
+  STATE.matrículas.forEach(m=>{ if(m.curso&&!existingNames.has(m.curso)) missing.add(m.curso); });
+  STATE.pagosRegulares.forEach(p=>{ if(p.curso&&!existingNames.has(p.curso)) missing.add(p.curso); });
   if(missing.size===0){ alert('✅ No hay cursos faltantes. Todos los cursos de las matrículas ya existen.'); return; }
   const lista=[...missing].sort();
-  const archivados = STATE.cursosEliminados||[];
-  // Para cada nombre, buscamos la versión archivada MÁS RECIENTE (si existe) —
-  // así sabemos de antemano si la recuperación traerá todos los datos o solo el nombre.
-  const archivoPorNombre = {};
-  archivados.forEach(c=>{ archivoPorNombre[c.nombre]=c; }); // el último sobrescribe (más reciente)
   document.getElementById('modal-container').innerHTML=`
   <div class="moverlay">
-  <div class="modal" style="max-width:540px">
+  <div class="modal" style="max-width:500px">
     <div class="modal-hdr">
       <div class="modal-title"><i class="ti ti-restore"></i> Recuperar cursos borrados</div>
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-body">
-      <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface2);cursor:pointer;margin-bottom:10px;font-weight:600;font-size:13px">
-        <div style="flex:1">Seleccionar todos (${lista.length})</div>
-        <input type="checkbox" id="rec-all" onchange="document.querySelectorAll('.rec-chk').forEach(c=>c.checked=this.checked)" checked style="flex-shrink:0;width:16px;height:16px">
+      <div style="background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;color:#92600a">
+        ⚠️ Los cursos recuperados no tendrán horario, costo ni fechas — solo el nombre. Éditalos después para completar la información.
+      </div>
+      <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px">Selecciona los cursos a recuperar:</div>
+      <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);margin-bottom:6px;cursor:pointer;font-weight:600">
+        <input type="checkbox" id="rec-all" onchange="document.querySelectorAll('.rec-chk').forEach(c=>c.checked=this.checked)" checked>
+        Seleccionar todos (${lista.length})
       </label>
-      <div style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto">
-        ${lista.map(nombre=>{
-          const arch=archivoPorNombre[nombre];
-          const nAlumnos=STATE.matrículas.filter(m=>m.curso===nombre).length;
-          return `
-          <label style="display:flex;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);cursor:pointer" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
-            <div style="flex:1">
-              <div style="font-weight:600;font-size:13px">📚 ${nombre}</div>
-              <div style="font-size:11px;color:var(--text3);margin-top:2px">${nAlumnos} alumno(s) · ${arch?'<span style="color:var(--green)">✓ datos completos disponibles</span>':'<span style="color:var(--warn)">⚠️ solo el nombre (sin respaldo de horario/costo)</span>'}</div>
-            </div>
-            <input type="checkbox" class="rec-chk" value="${esc(nombre)}" checked style="flex-shrink:0;width:16px;height:16px">
-          </label>`;
-        }).join('')}
+      <div style="max-height:240px;overflow-y:auto">
+        ${lista.map(nombre=>`
+        <label style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;cursor:pointer;font-size:13px" onmouseover="this.style.background='var(--surface2)'" onmouseout="this.style.background=''" style="text-align:left;width:100%;box-sizing:border-box">
+          <input type="checkbox" class="rec-chk" value="${nombre}" checked>
+          <span>📚 ${nombre}</span>
+          <span style="margin-left:auto;font-size:11px;color:var(--text3)">${STATE.matrículas.filter(m=>m.curso===nombre).length} alumno(s)</span>
+        </label>`).join('')}
       </div>
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
         <button class="btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -6498,192 +6346,17 @@ async function recuperarCursos(){
 async function confirmarRecuperacion(){
   const seleccionados=[...document.querySelectorAll('.rec-chk:checked')].map(cb=>cb.value);
   if(seleccionados.length===0){ alert('Selecciona al menos un curso.'); return; }
-  const archivados = STATE.cursosEliminados||[];
-  let conDatos=0, soloNombre=0;
   seleccionados.forEach(nombre=>{
-    if(STATE.cursos.find(c=>c.nombre===nombre)) return; // ya existe, no duplicar
-    // Buscamos la versión archivada MÁS RECIENTE con ese nombre (recorremos desde
-    // el final ya que cursosEliminados se agrega cronológicamente).
-    let archivado=null;
-    for(let i=archivados.length-1;i>=0;i--){ if(archivados[i].nombre===nombre){ archivado=archivados[i]; break; } }
-    if(archivado){
-      const {_eliminadoAt,_eliminadoPor,_fromGrupo,...datos}=archivado;
-      STATE.cursos.push({...datos, id:datos.id||uid(), grupos:datos.grupos||[],
-        _recovered:true, _recoveredAt:new Date().toISOString(), _recoveredConDatos:true});
-      conDatos++;
-    } else {
+    if(!STATE.cursos.find(c=>c.nombre===nombre)){
       STATE.cursos.push({id:uid(),nombre,costoBase:'',tipo:'regular',
         fechaInicio:null,fechaFin:null,grupos:[],
         createdAt:new Date().toISOString(),_recovered:true});
-      soloNombre++;
     }
   });
   await saveState();
   closeModal();
   renderCursos();
-  let msg=`✅ Recuperados ${seleccionados.length} curso(s).`;
-  if(conDatos) msg+=`\n${conDatos} con todos sus datos originales (horario, costo, salón, etc.)`;
-  if(soloNombre) msg+=`\n${soloNombre} solo con el nombre — no había respaldo, captura el resto manualmente.`;
-  alert(msg);
-}
-
-// ── LIMPIAR PAGOS HUÉRFANOS: elimina de CRM los pagosRegulares cuyo folio
-// no corresponde a ninguna matrícula activa. Una vez borrados de CRM, Contabilidad
-// detecta automáticamente que sus ingresos correspondientes son "huérfanos" y los
-// elimina en el próximo ciclo de sincronización.
-async function limpiarPagosHuerfanosCRM(){
-  if(!hasPerm('modo_dios')){ alert('Solo el Modo Dios puede usar esta función.'); return; }
-  const foliosValidos=new Set((STATE.matrículas||[]).map(m=>m.folio));
-  const huerfanos=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio!=null&&!foliosValidos.has(p.crmFolio));
-  if(huerfanos.length===0){ alert('✅ No hay pagos huérfanos. Todos los pagos tienen matrícula activa.'); return; }
-  const detalles=huerfanos.map(p=>`Folio #${p.crmFolio} — ${p.alumnoNombre||'(sin nombre)'} — ${(p.meses||[]).join(', ')} — ${fmtMXN(p.montoFinal||0)}`).join('\n');
-  if(!confirm(
-    `🗑️ Eliminar ${huerfanos.length} pago${huerfanos.length===1?'':'s'} huérfano${huerfanos.length===1?'':'s'} de CRM?\n\n${detalles}\n\nAl confirmar:\n• Los pagos se borran de CRM permanentemente.\n• Contabilidad detectará automáticamente que los ingresos correspondientes ya no tienen respaldo en CRM y los eliminará en el próximo ciclo de sincronización.\n• Los ingresos editados manualmente en Contabilidad (no generados por auto-sync) NO se verán afectados.\n\nEsta acción NO se puede deshacer.`
-  ))return;
-  const foliosHuerfanos=new Set(huerfanos.map(p=>p.crmFolio));
-  STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(p=>!foliosHuerfanos.has(p.crmFolio));
-  await saveState();
-  closeModal();
-  renderPagos();
-  buildSidebar();
-  setTimeout(()=>alert(`✅ Eliminados ${huerfanos.length} pago${huerfanos.length===1?'':'s'} huérfano${huerfanos.length===1?'':'s'}. Recarga Contabilidad en unos segundos para ver los cambios reflejados.`),200);
-}
-
-// ── DIAGNÓSTICO DE PAGOS: audita TODAS las matrículas y pagos en busca de las
-// mismas inconsistencias que hemos encontrado y corregido (folios huérfanos,
-// grupos duplicados, pagos incompletos, referencias rotas a cursos, etc.) ──
-function diagnosticoPagos(){
-  if(!hasPerm('modo_dios')){ alert('Solo el Modo Dios puede usar esta función.'); return; }
-
-  const cursoONombreExiste = (nombre) => {
-    if(!nombre) return false;
-    return (STATE.cursos||[]).some(c => c.nombre===nombre || (c.grupos||[]).some(g=>g.nombre===nombre));
-  };
-
-  // 1. Matrículas cuyo curso/grupo ya no existe en ningún lado
-  const matriculasRotas = (STATE.matrículas||[]).filter(m => m.curso && !cursoONombreExiste(m.curso));
-
-  // 2. Pagos cuyo folio no corresponde a ninguna matrícula (huérfanos)
-  const foliosValidos = new Set((STATE.matrículas||[]).map(m=>m.folio));
-  const pagosHuerfanos = (STATE.pagosRegulares||[]).filter(p => p.crmFolio!=null && !foliosValidos.has(p.crmFolio));
-
-  // 3. Pagos con datos incompletos (sin monto o sin método) — el patrón del bug
-  //    de guardarEdicionMasiva que dejaba registros "fantasma"
-  const pagosIncompletos = (STATE.pagosRegulares||[]).filter(p => p.montoFinal==null || !p.method);
-
-  // 4. Grupos duplicados dentro del mismo curso (el bug que causó la duplicación de JCA)
-  const gruposDuplicados = [];
-  (STATE.cursos||[]).forEach(c=>{
-    const nombres={};
-    (c.grupos||[]).forEach(g=>{
-      const key=(g.nombre||'').trim().toLowerCase();
-      if(!key) return;
-      nombres[key]=(nombres[key]||0)+1;
-    });
-    Object.entries(nombres).forEach(([nombre,count])=>{
-      if(count>1) gruposDuplicados.push({curso:c.nombre, grupo:nombre, count});
-    });
-  });
-
-  // 5. Folios de matrícula duplicados (no debería pasar nunca — chequeo defensivo)
-  const folioCounts={};
-  (STATE.matrículas||[]).forEach(m=>{ folioCounts[m.folio]=(folioCounts[m.folio]||0)+1; });
-  const foliosDuplicados = Object.entries(folioCounts).filter(([f,c])=>c>1).map(([f])=>parseInt(f));
-
-  // 6. Nombre de alumno desincronizado entre el pago y la matrícula actual
-  //    (ya NO afecta el estado de pago, que ahora se calcula por folio — pero
-  //    sigue siendo útil saberlo para que los reportes muestren el nombre correcto)
-  const nombresDesincronizados = [];
-  (STATE.pagosRegulares||[]).forEach(p=>{
-    if(p.crmFolio==null) return;
-    const m = (STATE.matrículas||[]).find(x=>x.folio===p.crmFolio);
-    if(m && p.alumnoNombre && m.alumno && p.alumnoNombre.trim()!==m.alumno.trim()){
-      nombresDesincronizados.push({folio:p.crmFolio, nombrePago:p.alumnoNombre, nombreActual:m.alumno});
-    }
-  });
-
-  const totalIssues = matriculasRotas.length + pagosHuerfanos.length + pagosIncompletos.length +
-    gruposDuplicados.length + foliosDuplicados.length + nombresDesincronizados.length;
-
-  const rowStyle = 'padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--surface)';
-  const seccion = (titulo, icon, items, renderItem) => items.length===0 ? '' : `
-    <div style="margin-bottom:16px">
-      <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;display:flex;align-items:center;gap:6px">
-        ${icon} ${titulo} <span class="sn-badge" style="background:var(--danger)">${items.length}</span>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px">
-        ${items.slice(0,30).map(renderItem).join('')}
-      </div>
-      ${items.length>30?`<div style="font-size:11px;color:var(--text3);margin-top:4px">… y ${items.length-30} más</div>`:''}
-    </div>`;
-
-  const body = totalIssues===0
-    ? `<div style="text-align:center;padding:30px 10px"><div style="font-size:40px;margin-bottom:10px">✅</div><div style="font-weight:600;color:var(--text);font-size:14px">No se encontraron inconsistencias</div><div style="font-size:12px;color:var(--text3);margin-top:4px">Todas las matrículas y pagos están correctamente vinculados.</div></div>`
-    : `
-    <div style="background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#92600a">
-      Se encontraron <strong>${totalIssues}</strong> inconsistencia(s). Revísalas abajo.
-    </div>
-    ${seccion('Matrículas con curso/grupo inexistente', '📚', matriculasRotas, m=>`
-      <div style="${rowStyle}">
-        <strong>${esc(m.alumno)}</strong> — Folio #${m.folio} — busca el curso <strong>"${esc(m.curso)}"</strong> que ya no existe
-        <div style="margin-top:4px"><button class="btn-ghost btn-sm" onclick="recuperarCursos()">Ir a recuperar cursos</button></div>
-      </div>`)}
-    ${pagosHuerfanos.length>0?`
-    <div style="margin-bottom:16px">
-      <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.4px;display:flex;align-items:center;gap:6px">
-        💸 Pagos sin matrícula asociada (huérfanos) <span class="sn-badge" style="background:var(--danger)">${pagosHuerfanos.length}</span>
-      </div>
-      <div style="font-size:12px;color:var(--text3);margin-bottom:8px">
-        Estos pagos pertenecen a folios que ya no tienen matrícula — posiblemente de matrículas eliminadas sin borrar sus pagos.
-        Mientras permanezcan en CRM, Contabilidad no puede limpiar los ingresos correspondientes.
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
-        ${pagosHuerfanos.slice(0,30).map(p=>`
-        <div style="${rowStyle}">
-          Folio #${p.crmFolio} — ${esc(p.alumnoNombre||'(sin nombre)')} — ${esc((p.meses||[]).join(', '))} — ${fmtMXN(p.montoFinal||0)}
-        </div>`).join('')}
-        ${pagosHuerfanos.length>30?`<div style="font-size:11px;color:var(--text3);margin-top:4px">… y ${pagosHuerfanos.length-30} más</div>`:''}
-      </div>
-      <button class="btn-danger btn-sm" onclick="limpiarPagosHuerfanosCRM()" style="font-size:12px">
-        <i class="ti ti-trash"></i> Eliminar los ${pagosHuerfanos.length} pago${pagosHuerfanos.length===1?'':'s'} huérfano${pagosHuerfanos.length===1?'':'s'} de CRM
-      </button>
-      <div style="font-size:11px;color:var(--text3);margin-top:6px">
-        Contabilidad detectará el cambio automáticamente y borrará los ingresos correspondientes.
-      </div>
-    </div>`:''}
-    ${seccion('Pagos con datos incompletos', '⚠️', pagosIncompletos, p=>`
-      <div style="${rowStyle}">
-        Folio #${p.crmFolio} — ${esc(p.alumnoNombre||'(sin nombre)')} — ${esc((p.meses||[]).join(', '))}
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">${p.montoFinal==null?'Falta el monto. ':''}${!p.method?'Falta el método de pago. ':''}Es posible que no se sincronice correctamente con Contabilidad.</div>
-      </div>`)}
-    ${seccion('Grupos duplicados dentro del mismo curso', '👥', gruposDuplicados, d=>`
-      <div style="${rowStyle}">
-        Curso <strong>"${esc(d.curso)}"</strong> tiene <strong>${d.count}</strong> grupos llamados "${esc(d.grupo)}"
-        <div style="margin-top:4px"><button class="btn-ghost btn-sm" onclick="closeModal();showModalEditarCurso('${esc(d.curso).replace(/'/g,"\\'")}')">Editar curso</button></div>
-      </div>`)}
-    ${seccion('Folios de matrícula duplicados', '🔢', foliosDuplicados, f=>`
-      <div style="${rowStyle}">Folio #${f} está siendo usado por más de una matrícula. Esto no debería pasar — contáctanos si lo ves.</div>`)}
-    ${seccion('Nombre de alumno desincronizado en pagos', '✏️', nombresDesincronizados, d=>`
-      <div style="${rowStyle}">
-        Folio #${d.folio} — el pago dice "<strong>${esc(d.nombrePago)}</strong>" pero la matrícula actual dice "<strong>${esc(d.nombreActual)}</strong>"
-        <div style="font-size:11px;color:var(--text3);margin-top:2px">Solo afecta el nombre mostrado en reportes — no afecta el estado de pago, que se calcula por folio.</div>
-      </div>`)}
-    `;
-
-  document.getElementById('modal-container').innerHTML=`
-  <div class="moverlay">
-  <div class="modal" style="max-width:640px">
-    <div class="modal-hdr">
-      <div class="modal-title"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</div>
-      <button class="modal-close" onclick="closeModal()">✕</button>
-    </div>
-    <div class="modal-body" style="max-height:70vh;overflow-y:auto">
-      ${body}
-    </div>
-    <div style="display:flex;justify-content:flex-end;padding:14px;border-top:1px solid var(--border)">
-      <button class="btn-ghost" onclick="closeModal()">Cerrar</button>
-    </div>
-  </div></div>`;
+  alert(`✅ Recuperados ${seleccionados.length} cursos. Edítalos para completar la información.`);
 }
 
 
@@ -7051,21 +6724,12 @@ function getPrecioPaquete(curso, n){
     }
     return true;
   });
-  // Orden: primero por mesesMinimos descendente (preferir el escalón más alto que
-  // el cliente alcanza), y en caso de EMPATE, por el descuento resultante (mayor
-  // descuento gana) — antes un empate se resolvía por orden arbitrario del arreglo,
-  // lo que podía aplicar la promo menos conveniente para el cliente sin razón.
-  var descuentoDe = function(p){ return p.tipo==='porcentaje' ? base*((p.valor||0)/100) : (p.valor||0); };
-  candidatas.sort(function(a,b){
-    var diff=(b.mesesMinimos||0)-(a.mesesMinimos||0);
-    if(diff!==0) return diff;
-    return descuentoDe(b)-descuentoDe(a);
-  });
+  candidatas.sort(function(a,b){return (b.mesesMinimos||0)-(a.mesesMinimos||0);});
   var promo=candidatas[0]||null;
   var precio=base;
   var label=base>0?('Precio regular — $'+base.toLocaleString('es-MX')+' c/u'):'—';
   if(promo){
-    var desc = descuentoDe(promo);
+    var desc = promo.tipo==='porcentaje' ? base*((promo.valor||0)/100) : (promo.valor||0);
     precio = Math.max(0, base-desc);
     label = promo.nombre+' — $'+precio.toLocaleString('es-MX')+' c/u';
   }
