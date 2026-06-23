@@ -2051,7 +2051,14 @@ function showModalNuevaMatricula(){
       <div class="form-grid">
         <div class="form-group span2">
           <label class="flbl">${t('mat_campo_alumno')}</label>
-          <input id="f-alumno" placeholder="Nombre completo del alumno">
+          <input id="f-alumno" placeholder="Nombre completo del alumno" list="f-alumno-list"
+            autocomplete="off"
+            oninput="autoFillAlumno()"
+            onchange="autoFillAlumno()">
+          <datalist id="f-alumno-list">
+            ${[...new Set((STATE.matrículas||[]).map(m=>m.alumno).filter(Boolean))].sort().map(n=>`<option value="${esc(n)}">`).join('')}
+          </datalist>
+          <div id="f-alumno-hint" style="font-size:11px;color:var(--green);margin-top:4px;display:none"></div>
         </div>
         <div class="form-group">
           <label class="flbl">${t('mat_campo_nac')}</label>
@@ -2088,6 +2095,7 @@ function showModalNuevaMatricula(){
         <div class="form-group">
           <label class="flbl">${t('mat_campo_pago')} <span style="font-size:10px;color:var(--text3)">(primer pago)</span></label>
           <input type="number" id="f-pago" min="0" placeholder="0.00" oninput="updateFirstPaymentStatus()">
+          <div id="f-pago-warn" style="display:none;font-size:11px;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:6px;padding:6px 10px;margin-top:4px"></div>
         </div>
         <div class="form-group">
           <label class="flbl">Tipo de pago</label>
@@ -2209,6 +2217,27 @@ async function marcarAlertaCancelada(folio, mes){
   renderDashboard();
 }
 
+function autoFillAlumno(){
+  const val=(document.getElementById('f-alumno')?.value||'').trim();
+  if(!val) return;
+  // Buscar la matrícula más reciente de este alumno (folio más alto = más nuevo)
+  const prevMats=(STATE.matrículas||[]).filter(m=>m.alumno===val).sort((a,b)=>b.folio-a.folio);
+  const m=prevMats[0];
+  if(!m) return;
+  // Auto-rellenar solo campos vacíos (no pisar lo que el usuario ya escribió)
+  const fill=(id,val)=>{const el=document.getElementById(id);if(el&&!el.value&&val)el.value=val;};
+  fill('f-nac',    m.nacimiento||'');
+  fill('f-titular',m.titular||'');
+  fill('f-email',  m.email||'');
+  fill('f-tel',    m.telefono||'');
+  // Mostrar confirmación
+  const hint=document.getElementById('f-alumno-hint');
+  if(hint){
+    hint.textContent='✓ Datos personales autocompletados desde matrícula #'+m.folio+' ('+m.curso+')';
+    hint.style.display='block';
+  }
+}
+
 async function guardarMatricula(){
   const alumno=document.getElementById('f-alumno').value.trim();
   const nac=document.getElementById('f-nac').value;
@@ -2255,15 +2284,25 @@ async function guardarMatricula(){
   }
   const folio=STATE.nextFolio++;
   const pagoMensualFinal=pagoMensualVal||parseFloat(pago)||0;
-  // ── Autorización Modo Dios: primer pago por debajo del mínimo del curso ──
+  // ── Autorización Modo Dios: primer pago por debajo del mínimo/costo del curso ──
+  // FIX: usar costoBase como mínimo cuando pagoMinimo no esté configurado,
+  // para que la autorización dispare aunque el campo "pago mínimo" no esté definido.
   var cursoObj=(STATE.cursos||[]).find(function(c){return c.nombre===curso;});
-  var minimoReq=cursoObj?(cursoObj.pagoMinimo||0):0;
+  var minimoReq=cursoObj?Math.max(cursoObj.pagoMinimo||0, parseFloat(cursoObj.costoBase)||0):0;
   var pagoVal=parseFloat(pago)||0;
-  var necesitaAutorizacion = minimoReq>0 && pagoVal<minimoReq && !puedeAutorizarPromos();
+  // Si tiene semidios o modo dios puede autorizar directamente
+  var necesitaAutorizacion = minimoReq>0 && pagoVal>0 && pagoVal<minimoReq && !puedeAutorizarPromos();
   var motivoAuth='';
   if(necesitaAutorizacion){
-    motivoAuth=prompt('⚠️ Este pago ($'+pagoVal.toLocaleString('es-MX')+') es menor al mínimo del curso ($'+minimoReq.toLocaleString('es-MX')+').\n\nLa matrícula se guardará, pero requiere autorización del Modo Dios antes de considerarse válida.\n\nExplica brevemente el motivo (ej. beca, promoción especial, caso particular):');
-    if(motivoAuth===null){ return; } // canceló — no guardar nada
+    if(puedeAutorizarPromos()){
+      // Semidios: auto-autoriza pero pide nota igualmente
+      motivoAuth=prompt('ℹ️ Modo Semidios activo. El pago ($'+pagoVal.toLocaleString('es-MX')+') es menor al precio del curso ($'+minimoReq.toLocaleString('es-MX')+').\nSe aplicará automáticamente. Indica el motivo (beca, caso especial, etc.):');
+      if(motivoAuth===null){ return; }
+      necesitaAutorizacion=false; // semidios auto-autoriza
+    } else {
+      motivoAuth=prompt('⚠️ El pago ($'+pagoVal.toLocaleString('es-MX')+') es menor al precio del curso ($'+minimoReq.toLocaleString('es-MX')+').\n\nLa matrícula se guardará como PENDIENTE DE AUTORIZACIÓN — el Modo Dios deberá aprobarla antes de que sea válida.\n\nEscribe el motivo del precio especial (beca, caso particular, etc.):');
+      if(motivoAuth===null){ return; } // canceló — no guardar nada
+    }
   }
   var promoSelEl=document.getElementById('f-promo');
   var promoAplicada=promoSelEl&&promoSelEl.value?promoSelEl.value:null;
@@ -2785,6 +2824,7 @@ function renderPagos(){
     <button class="tab-btn${pagoSubTab==='historial'?' active':''}" data-tab="historial" onclick="switchPagoTab('historial')"><i class="ti ti-list"></i> ${t('pag_tab_historial')}</button>
     <button class="tab-btn${pagoSubTab==='masivo'?' active':''}" data-tab="masivo" onclick="switchPagoTab('masivo')"><i class="ti ti-cash-banknote"></i> Pago Masivo</button>
     <button class="tab-btn${pagoSubTab==='pendientes'?' active':''}" data-tab="pendientes" onclick="switchPagoTab('pendientes')"><i class="ti ti-user-exclamation"></i> ${t('pag_tab_pendientes')} ${pending>0?`<span class="sn-badge" style="background:var(--danger);margin-left:4px">${pending}</span>`:''}</button>
+    <button class="tab-btn${pagoSubTab==='promos'?' active':''}" data-tab="promos" onclick="switchPagoTab('promos')"><i class="ti ti-tag"></i> ${t('pag_tab_promos')}</button>
   </div>
   <div id="pago-content"></div>`;
   renderPagoTab();
@@ -2805,6 +2845,7 @@ function renderPagoTab(){
   else if(pagoSubTab==='historial')el.innerHTML=buildHistorialPagos();
   else if(pagoSubTab==='pendientes')el.innerHTML=buildPendientes();
   else if(pagoSubTab==='masivo')el.innerHTML=buildPagoMasivo();
+  else if(pagoSubTab==='promos'){el.innerHTML=buildPromosPagos();attachPromoEvents();}
 
   attachPagoEvents();
 }
@@ -3581,6 +3622,36 @@ async function eliminarPago(id){
   if(!confirm('¿Eliminar este pago? Esta acción no se puede deshacer.'))return;
   STATE.pagosRegulares=STATE.pagosRegulares.filter(p=>p.id!==id);
   await saveState();renderPagoTab();buildSidebar();
+}
+
+// ── Pestaña Promociones (dentro de Pagos) ──────────────────────────────────
+// Embebe el mismo contenido que renderModoDios() como sub-pestaña de Pagos.
+function buildPromosPagos(){
+  // Generamos el mismo HTML que la sección del Modo Dios directamente.
+  // Necesitamos un div contenedor con id sec-promos para que el scroll desde
+  // el Dashboard funcione correctamente aunque estemos dentro de pago-content.
+  var tmp=document.createElement('div');
+  tmp.id='sec-promos';
+  // Llama a renderModoDios() directamente para no duplicar la lógica
+  renderModoDios();
+  // Después de que renderModoDios() haya puesto su contenido en main-content,
+  // lo tomamos y lo devolvemos como string para pago-content.
+  var mc=document.getElementById('main-content');
+  return mc?mc.innerHTML:'';
+}
+
+function attachPromoEvents(){
+  // Los eventos de promociones son globales (guardarPromo, autorizarPromo, etc.)
+  // ya están disponibles sin necesidad de re-bindeo.
+  // Solo re-adjuntamos el form de creación si está visible.
+  var form=document.getElementById('sec-promos');
+  if(form){
+    var selCurso=form.querySelector('#promo-cursos-tipo');
+    if(selCurso&&!selCurso._bound){
+      selCurso._bound=true;
+    }
+  }
+  attachPagoEvents();
 }
 
 // ── Pendientes ─────────────────────────────────
@@ -6521,6 +6592,19 @@ function updateFirstPaymentStatus(){
   var val=parseFloat(document.getElementById('f-pago')?.value)||0;
   var cont=document.getElementById('f-pago-status-cont');
   if(cont) cont.style.display=val>0?'block':'none';
+  // Mostrar advertencia si el precio es menor al costo base del curso
+  var curso=document.getElementById('f-curso')?.value;
+  var cursoObj=curso?(STATE.cursos||[]).find(function(c){return c.nombre===curso;}):null;
+  var minimoReq=cursoObj?Math.max(cursoObj.pagoMinimo||0,parseFloat(cursoObj.costoBase)||0):0;
+  var warn=document.getElementById('f-pago-warn');
+  if(warn){
+    if(val>0 && minimoReq>0 && val<minimoReq){
+      warn.style.display='block';
+      warn.innerHTML='⚠️ El monto es menor al precio del curso ($'+minimoReq.toLocaleString('es-MX')+').'+(puedeAutorizarPromos()?' Se autorizará automáticamente (Semidios).':' Se enviará a autorización del Modo Dios.');
+    } else {
+      warn.style.display='none';
+    }
+  }
 }
 function togglePagoStatus(paid){
   var mc=document.getElementById('f-metodo-cont');
