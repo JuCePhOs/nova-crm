@@ -6563,18 +6563,46 @@ function updateFirstPaymentStatus(){
   var val=parseFloat(document.getElementById('f-pago')?.value)||0;
   var cont=document.getElementById('f-pago-status-cont');
   if(cont) cont.style.display=val>0?'block':'none';
-  // Mostrar advertencia si el precio es menor al costo base del curso
+  // SYNC: cuando el usuario escribe en f-pago, replicar el valor a mi-total-input
+  // para que guardarMatriculasMultiples lo pueda leer correctamente.
+  var miTotalInp=document.getElementById('mi-total-input');
+  if(miTotalInp&&val>0){
+    var floor=Math.floor(val);
+    miTotalInp.value=floor;
+    // Actualizar la distribución si hay grupos seleccionados
+    var grupos=document.querySelectorAll('.f-grupo-chk:checked');
+    var ng=grupos.length;
+    if(ng>0&&typeof distribuirPago==='function'){
+      var dist=distribuirPago(floor,ng);
+      var box=document.getElementById('mi-dist-box');
+      var txt=document.getElementById('mi-dist-txt');
+      if(box&&txt){
+        txt.textContent=dist.every(function(v){return v===dist[0];})?
+          '$'+dist[0].toLocaleString('es-MX')+' × '+ng+' contratos':
+          dist.map(function(v,i){return 'C'+(i+1)+': $'+v.toLocaleString('es-MX');}).join(' · ');
+        box.style.display='block';
+      }
+    }
+    // Actualizar advertencia en el campo Ajustar total
+    var minVal=parseInt(miTotalInp.getAttribute('data-min'))||0;
+    var warnMi=document.getElementById('mi-ajuste-warn');
+    if(warnMi){
+      if(floor>0&&minVal>0&&floor<minVal){
+        warnMi.style.display='block';
+        warnMi.innerHTML='⚠️ Precio por debajo del costo base — '+(puedeAutorizarPromos()?'el Semidios puede autorizarlo.':'se enviará a autorización al guardar.');
+      } else { warnMi.style.display='none'; }
+    }
+  }
+  // Advertencia en f-pago
   var curso=document.getElementById('f-curso')?.value;
   var cursoObj=curso?(STATE.cursos||[]).find(function(c){return c.nombre===curso;}):null;
   var minimoReq=cursoObj?Math.max(cursoObj.pagoMinimo||0,parseFloat(cursoObj.costoBase)||0):0;
   var warn=document.getElementById('f-pago-warn');
   if(warn){
-    if(val>0 && minimoReq>0 && val<minimoReq){
+    if(val>0&&minimoReq>0&&val<minimoReq){
       warn.style.display='block';
-      warn.innerHTML='⚠️ El monto es menor al precio del curso ($'+minimoReq.toLocaleString('es-MX')+').'+(puedeAutorizarPromos()?' Se autorizará automáticamente (Semidios).':' Se enviará a autorización del Modo Dios.');
-    } else {
-      warn.style.display='none';
-    }
+      warn.innerHTML='⚠️ Precio por debajo del costo base ($'+minimoReq.toLocaleString('es-MX')+') — '+(puedeAutorizarPromos()?'el Semidios puede autorizarlo.':'se enviará a autorización del Modo Dios al guardar.');
+    } else { warn.style.display='none'; }
   }
 }
 function togglePagoStatus(paid){
@@ -6727,7 +6755,7 @@ cont.innerHTML='<div style="font-size:13px;font-weight:700;color:var(--text2);ma
     +'<div><span style="color:var(--text3)">Total a pagar</span><br><strong id="mi-total" style="font-size:20px;color:var(--green)">—</strong></div>'
     +'</div>'
     +'<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">'
-    +'<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px">Ajustar total — mín: <span id="mi-min-txt">$0</span></div>'
+    +'<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px">Ajustar total — precio base: <span id="mi-min-txt">$0</span></div>'
     +'<input type="number" id="mi-total-input" step="1" style="width:100%;padding:7px 10px;border:2px solid var(--accent);border-radius:7px;font-size:15px;font-weight:700;color:var(--accent);box-sizing:border-box" oninput="onManualTotalChange()">'
     +'<div id="mi-dist-box" style="display:none;margin-top:7px;font-size:11px;color:var(--text3);padding:6px 10px;background:var(--surface);border-radius:6px;border:1px solid var(--border)">'
     +'<strong style="color:var(--text2)">Distribución:</strong> <span id="mi-dist-txt"></span></div>'
@@ -6917,10 +6945,14 @@ async function guardarMatriculasMultiples(){
   var precioPorGrupo=getPrecioXGrupo(n);
   var autoTotal=precioPorGrupo*n;
   var inpManual=document.getElementById('mi-total-input');
+  var fpPago=document.getElementById('f-pago');
   var userInputTotal=Math.floor(parseFloat(inpManual&&inpManual.value)||0);
-  // FIX: respetar el precio que el usuario escribió en Ajustar total.
-  // Antes se usaba Math.max(..., autoTotal) que siempre forzaba al precio más alto.
-  var totalPago=userInputTotal>0?userInputTotal:autoTotal;
+  var fpagoVal=Math.floor(parseFloat(fpPago&&fpPago.value)||0);
+  // FIX COMPLETO: leer el precio desde f-pago ("Primer pago") si el usuario lo modificó,
+  // ya que es el campo donde el usuario escribe el precio especial.
+  // Si f-pago difiere de mi-total-input Y fue modificado manualmente, f-pago tiene prioridad.
+  var fpagoMod=fpPago&&fpPago.dataset.default!=='1'&&fpagoVal>0;
+  var totalPago=fpagoMod?fpagoVal:(userInputTotal>0?userInputTotal:autoTotal);
   // ── Autorización si el precio está por debajo del costo base ──────────────
   var cursoBase=parseFloat(String((cursoObj&&cursoObj.costoBase)||'').replace(/[^0-9.]/g,''))||0;
   var minimoReqM=cursoObj?Math.max(cursoObj.pagoMinimo||0,cursoBase):0;
