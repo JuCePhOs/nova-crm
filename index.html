@@ -2094,7 +2094,8 @@ function showModalNuevaMatricula(){
         </div>
         <div class="form-group">
           <label class="flbl">${t('mat_campo_pago')} <span style="font-size:10px;color:var(--text3)">(primer pago)</span></label>
-          <input type="number" id="f-pago" min="0" placeholder="0.00" oninput="updateFirstPaymentStatus()">
+          <input type="number" id="f-pago" min="0" placeholder="0.00"
+            oninput="this.dataset.default='0';updateFirstPaymentStatus()">
           <div id="f-pago-warn" style="display:none;font-size:11px;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-border);border-radius:6px;padding:6px 10px;margin-top:4px"></div>
         </div>
         <div class="form-group">
@@ -6655,11 +6656,19 @@ function recalcPagoConPromo(soloRecalcular){
     } else if(promo){
       var desc = promo.tipo==='porcentaje' ? +(base*promo.valor/100).toFixed(2) : promo.valor;
       precioFinal = Math.max(0, +(base-desc).toFixed(2));
-      hintTxt = '✓ '+promo.nombre+': -'+fmtMXN(desc);
+      hintTxt = '✓ '+promo.nombre+': descuento de '+fmtMXN(desc)
+        +' → precio sugerido '+fmtMXN(precioFinal)
+        +'. El precio cobrado es el que escribas arriba en "Primer pago".';
     }
+  } else {
+    precioFinal = base;
   }
-  pagoEl.value = precioFinal;
-  if(pagoMensualEl && !pagoMensualEl.value) pagoMensualEl.value = precioFinal;
+  // Solo poblar f-pago si está vacío o marcado como valor por defecto (no editado por el usuario)
+  if(!pagoEl.value || pagoEl.dataset.default==='1'){
+    pagoEl.value = precioFinal;
+    pagoEl.dataset.default = '1';
+  }
+  if(pagoMensualEl && !pagoMensualEl.value) pagoMensualEl.value = pagoEl.value;
   if(hintEl) hintEl.textContent = hintTxt;
 }
 
