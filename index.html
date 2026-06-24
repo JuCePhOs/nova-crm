@@ -2794,7 +2794,7 @@ function renderPagos(){
       <h2>Pagos Regulares</h2>
       <p>${t('pag_subtitulo')} — ${new Date().toLocaleDateString('es-MX',{month:'long',year:'numeric'})}</p>
     </div>
-    ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="diagnosticoPagos()" title="Audita todas las matrículas en busca de inconsistencias"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</button> <button class="btn-primary btn-sm" onclick="inspeccionarFolios()" title="Ver y eliminar pagos de folios específicos con problemas"><i class="ti ti-search"></i> Inspeccionar folios</button>':''}
+    ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="diagnosticoPagos()" title="Audita todas las matrículas en busca de inconsistencias"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</button> <button class="btn-primary btn-sm" onclick="inspeccionarFolios()" title="Ver y eliminar pagos de folios específicos con problemas"><i class="ti ti-search"></i> Inspeccionar folios</button> <button class="btn-ghost btn-sm" onclick="repararPagosPaquete()" title="Crea pagos faltantes para folios de paquete (ej. 1186, 1187)"><i class="ti ti-tool"></i> Reparar paquetes</button>':''}
   </div>
   <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
     <div class="stat-card" style="--stripe:var(--green)"><div class="stat-label">Contratos al corriente</div><div class="stat-val">${(STATE.matrículas||[]).length-pending}</div><div class="stat-sub">de ${(STATE.matrículas||[]).length} alumnos</div></div>
@@ -3664,6 +3664,52 @@ async function eliminarPagoEspecifico(id){
   renderPagos();
   buildSidebar();
   setTimeout(function(){alert('✅ Pago eliminado. Ahora puedes registrar el pago correctamente para junio.');},200);
+}
+
+async function repararPagosPaquete(){
+  if(!hasPerm('modo_dios')){alert('Solo el Modo Dios puede usar esta función.');return;}
+  var pagosReg=STATE.pagosRegulares||[];
+  var mats=STATE.matrículas||[];
+  // Encontrar matrículas en paquete cuyo folio no tiene pago en pagosRegulares
+  var foliosSinPago=mats.filter(function(m){
+    if(!m.enPaquete||!(m.paqueteFolios&&m.paqueteFolios.length>1)) return false;
+    return !pagosReg.some(function(p){return String(p.crmFolio)===String(m.folio);});
+  });
+  if(foliosSinPago.length===0){
+    alert('✅ Todos los folios de paquete tienen su pago registrado.');return;
+  }
+  var detalle=foliosSinPago.map(function(m){return '#'+m.folio+' ('+m.alumno+' — '+m.curso+')';}).join('\n');
+  if(!confirm('Se crearán pagos faltantes para '+foliosSinPago.length+' folio(s):\n\n'+detalle+'\n\nEl monto se calculará proporcional al paquete. ¿Continuar?'))return;
+  foliosSinPago.forEach(function(m){
+    // Buscar el pago del master del mismo paquete
+    var pagoMaster=pagosReg.find(function(p){
+      return m.paqueteFolios.map(String).includes(String(p.crmFolio))&&!p.paqueteSlave;
+    });
+    var n=(m.paqueteFolios||[]).length||1;
+    var totalPaquete=pagoMaster?pagoMaster.paqueteTotal||pagoMaster.montoFinal*n:m.primerPago||0;
+    var montoFolio=Math.floor(totalPaquete/n);
+    var commF=0,ivaF=0,netoF=montoFolio;
+    var metodo=pagoMaster?pagoMaster.method||'cash':'cash';
+    if(metodo==='card'){commF=+(montoFolio*0.035).toFixed(2);ivaF=+(commF*0.16).toFixed(2);netoF=+(montoFolio-commF-ivaF).toFixed(2);}
+    STATE.pagosRegulares.push({
+      id:uid(),alumnoNombre:m.alumno,crmFolio:m.folio,curso:m.curso,
+      meses:[monthStr()],mesesCount:1,
+      montoBase:montoFolio,subtotal:montoFolio,
+      promoId:null,promoNombre:null,descuentoMonto:0,
+      montoFinal:montoFolio,commMP:commF,ivaMP:ivaF,neto:netoF,
+      method:metodo,
+      fecha:pagoMaster?pagoMaster.fecha:fmtFecha(todayISO()),
+      fechaISO:pagoMaster?pagoMaster.fechaISO:todayISO(),
+      notas:'[Reparado] Pago de paquete '+(m.paqueteFolios||[]).length+' grupos — Total $'+totalPaquete.toLocaleString('es-MX')+' — Folios #'+(m.paqueteFolios||[]).join(', #'),
+      paqueteFolios:[...(m.paqueteFolios||[])],
+      paqueteTotal:totalPaquete,
+      paqueteSlave:true, // no genera nuevo ingreso en Contabilidad (el master ya lo tiene)
+      createdAt:new Date().toISOString(),createdBy:currentUser.username
+    });
+  });
+  await saveState();
+  renderPagos();buildSidebar();
+  setTimeout(function(){alert('✅ '+foliosSinPago.length+' pago(s) creados. Los folios ya no aparecerán como pendientes.');},200);
 }
 
 async function limpiarPagosHuerfanosCRM(){
@@ -7111,17 +7157,31 @@ async function guardarMatriculasMultiples(){
     m.paqueteFolios=foliosCreados;
   });
 
-  // Register ONE global payment if already paid
+  // FIX: crear 1 pago por folio en CRM (así cada matrícula muestra como pagada),
+  // pero marcar los no-master como paqueteSlave:true para que Contabilidad
+  // solo cree 1 ingreso combinado (del master) con el total completo del paquete.
   if(yaPagado&&totalPago>0){
-    var comm=0,iva=0,neto=totalPago;
-    if(metodo==='card'){comm=+(totalPago*0.035).toFixed(2);iva=+(comm*0.16).toFixed(2);neto=+(totalPago-comm-iva).toFixed(2);}
-    STATE.pagosRegulares.push({id:uid(),alumnoNombre:alumno,crmFolio:foliosCreados[0],curso,
-      meses:[monthStr()],mesesCount:1,montoBase:totalPago,subtotal:totalPago,
-      promoId:null,promoNombre:null,descuentoMonto:0,montoFinal:totalPago,
-      commMP:comm,ivaMP:iva,neto,method:metodo,
-      fecha:fmtFecha(fechaISO),fechaISO,
-      notas:'Pago paquete '+n+' grupo'+(n>1?'s':'')+' — Folios #'+foliosCreados.join(', #'),
-      createdAt:new Date().toISOString(),createdBy:currentUser.username});
+    var notasPaquete='Paquete '+n+' grupo'+(n>1?'s':'')+' — Total $'+totalPago.toLocaleString('es-MX')+' — Folios #'+foliosCreados.join(', #');
+    foliosCreados.forEach(function(folio,idx){
+      var montoFolio=dist[idx]||Math.floor(totalPago/n);
+      var commF=0,ivaF=0,netoF=montoFolio;
+      if(metodo==='card'){commF=+(montoFolio*0.035).toFixed(2);ivaF=+(commF*0.16).toFixed(2);netoF=+(montoFolio-commF-ivaF).toFixed(2);}
+      STATE.pagosRegulares.push({
+        id:uid(),alumnoNombre:alumno,crmFolio:folio,curso,
+        meses:[monthStr()],mesesCount:1,
+        montoBase:montoFolio,subtotal:montoFolio,
+        promoId:null,promoNombre:null,descuentoMonto:0,
+        montoFinal:montoFolio,commMP:commF,ivaMP:ivaF,neto:netoF,
+        method:metodo,fecha:fmtFecha(fechaISO),fechaISO,
+        notas:notasPaquete,
+        paqueteFolios:[...foliosCreados],
+        paqueteTotal:totalPago,
+        // Solo el primer folio (master) se sincroniza como ingreso en Contabilidad.
+        // Los demás son paqueteSlave:true y el sync los ignora para no crear duplicados.
+        paqueteSlave:idx>0,
+        createdAt:new Date().toISOString(),createdBy:currentUser.username
+      });
+    });
   }
 
   // Registrar solicitud de autorización si el precio fue por debajo del mínimo
