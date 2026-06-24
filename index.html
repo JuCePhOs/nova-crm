@@ -2777,8 +2777,8 @@ function renderPagos(){
   if(!hasPerm('ver_pagos')){document.getElementById('main-content').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><h3>Sin acceso</h3></div>';return;}
   const cm=monthStr();
   const pagosMes=(STATE.pagosRegulares||[]).filter(p=>p.meses&&p.meses.includes(cm));
-  const alumnosPagados=new Set(pagosMes.map(p=>p.crmFolio)).size;
-  const pending=(STATE.matrículas||[]).filter(m=>!pagosMes.some(p=>p.crmFolio===m.folio)).length;
+  const alumnosPagados=new Set(pagosMes.map(p=>String(p.crmFolio))).size;
+  const pending=(STATE.matrículas||[]).filter(m=>!pagosMes.some(p=>String(p.crmFolio)===String(m.folio))).length;
   // Segmentación nuevos vs anteriores
   const _folioNuevosPag=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>m.folio));
   const _pagosAnt=pagosMes.filter(p=>!_folioNuevosPag.has(p.crmFolio));
@@ -3245,7 +3245,7 @@ function onAlumnoChange(){
   if(infoEl)infoEl.style.display='block';
   if(infoBox)infoBox.innerHTML=`<strong>${m.alumno}</strong> · Folio #${m.folio} · <span class="badge badge-admin" style="font-size:11px">${m.curso}</span>${base>0?` · Costo base: <strong>${fmtMXN(base)}</strong>`:''}`;
   // Mark covered months
-  const covered=new Set(STATE.pagosRegulares.filter(p=>p.crmFolio===folio).flatMap(p=>p.meses||[]));
+  const covered=new Set(STATE.pagosRegulares.filter(p=>String(p.crmFolio)===String(folio)).flatMap(p=>p.meses||[]));
   document.querySelectorAll('.month-chip').forEach(chip=>{
     const ym=chip.dataset.ym;
     chip.classList.remove('covered','sel');
@@ -3581,7 +3581,7 @@ function showModalEditarPago(id){
 }
 
 async function guardarEdicionPago(id){
-  const idx=(STATE.pagosRegulares||[]).findIndex(x=>x.id===id);
+  const idx=(STATE.pagosRegulares||[]).findIndex(x=>String(x.id)===String(id));
   if(idx===-1){alert('Pago no encontrado.');return;}
   const fechaRaw=(document.getElementById('ep-fecha')?.value||'').trim();
   const method=(document.getElementById('ep-method')?.value||'cash').trim();
@@ -3628,23 +3628,40 @@ async function eliminarPago(id){
 // ── Pendientes ─────────────────────────────────
 function buildPendientes(){
   const cm=monthStr();
-  const pagosMes=STATE.pagosRegulares.filter(p=>p.meses&&p.meses.includes(cm));
-  const pagados=new Set(pagosMes.map(p=>p.alumnoNombre));
-  const pendientes=STATE.matrículas.filter(m=>!pagados.has(m.alumno));
+  const pagosMes=(STATE.pagosRegulares||[]).filter(p=>p.meses&&p.meses.includes(cm));
+  // String() normaliza el tipo para evitar mismatch entre string/number en crmFolio
+  const pagados=new Set(pagosMes.map(p=>String(p.crmFolio)));
+  const pendientes=(STATE.matrículas||[]).filter(m=>!pagados.has(String(m.folio)));
   if(pendientes.length===0)return`<div class="empty"><div class="empty-icon">🎉</div><h3>¡Todos pagaron!</h3><p>${t('pag_pend_vacia_sub')} ${mesLabel(cm)}</p></div>`;
-  return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong>:</div>
-  <div class="table-wrap fade-in"><table>
-    <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
-    <tbody>
-    ${pendientes.map(m=>`<tr>
-      <td style="font-weight:600">${m.alumno}</td>
+  // Separar pendientes: anteriores (base mínima garantizada) vs nuevos este mes
+  const folioNuevos=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>String(m.folio)));
+  const pendAnt=pendientes.filter(m=>!folioNuevos.has(String(m.folio)));
+  const pendNvo=pendientes.filter(m=>folioNuevos.has(String(m.folio)));
+  const filasPend=group=>`${group.map(m=>`<tr>
+      <td style="font-weight:600">${esc(m.alumno)}</td>
       <td><span class="folio-tag">#${m.folio}</span></td>
-      <td><span class="badge badge-admin">${m.curso}</span></td>
+      <td><span class="badge badge-admin">${esc(m.curso)}</span></td>
       <td style="font-size:12px;color:var(--text2)">${m.email||'—'}</td>
       <td><button class="btn-green btn-sm" onclick="precargarPago(${m.folio})"><i class="ti ti-cash"></i> ${t('pag_reg_pago')}</button></td>
-    </tr>`).join('')}
-    </tbody>
-  </table></div>`;
+    </tr>`).join('')}`;
+  const tablaBase=`<div class="table-wrap fade-in"><table>
+    <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
+    <tbody>${filasPend(pendientes)}</tbody></table></div>`;
+  if(pendAnt.length>0&&pendNvo.length>0){
+    return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong> — ${pendientes.length} total:</div>
+    <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Alumnos anteriores (${pendAnt.length})</div>
+    <div class="table-wrap fade-in"><table>
+      <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
+      <tbody>${filasPend(pendAnt)}</tbody></table></div>
+    <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">🆕 Nuevos inscritos este mes (${pendNvo.length})</div>
+    <div class="table-wrap fade-in"><table>
+      <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
+      <tbody>${filasPend(pendNvo)}</tbody></table></div>`;
+  }
+  const label=pendNvo.length===pendientes.length
+    ?`${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong> — 🆕 todos son nuevos inscritos este mes:`
+    :`${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong>:`;
+  return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${label}</div>${tablaBase}`;
 }
 
 function precargarPago(folio){
@@ -3809,12 +3826,24 @@ function _renderAlumnosCards(){
   var q=(_alumnosQ||'').toLowerCase();
   var cm=monthStr();
   var seen={};
-  var todos=STATE.matrículas.slice().sort(function(a,b){return (a.alumno||'').localeCompare(b.alumno||'');});
+  var todos=(STATE.matrículas||[]).slice().sort(function(a,b){return (a.alumno||'').localeCompare(b.alumno||'');});
   var alumnos=[];
   todos.forEach(function(m){if(!seen[m.alumno]){seen[m.alumno]=true;alumnos.push(m);}});
+  // String() normalization to handle both string and number crmFolio values
   var pagados=new Set((STATE.pagosRegulares||[]).filter(function(p){
     return (p.meses&&p.meses.includes(cm))||(p.fechaISO&&p.fechaISO.startsWith(cm));
-  }).map(function(p){return p.alumnoNombre;}));
+  }).map(function(p){return String(p.crmFolio);}));
+  var folioTieneAlgunPago=new Set((STATE.pagosRegulares||[]).map(function(p){return String(p.crmFolio);}));
+  var folioNuevosAlm=new Set((STATE.matrículas||[]).filter(function(m){return m.fechaISO&&m.fechaISO.startsWith(cm);}).map(function(m){return String(m.folio);}));
+  function matriculaCubierta(x){
+    if(x.pagoTipo==='unico'){
+      return folioTieneAlgunPago.has(String(x.folio))||(!x.autorizacionPendiente&&(x.primerPago||0)>0);
+    }
+    return pagados.has(String(x.folio));
+  }
+  function esNuevoEsteMes(nombre){
+    return (STATE.matrículas||[]).some(function(x){return x.alumno===nombre&&folioNuevosAlm.has(String(x.folio));});
+  }
   if(q) alumnos=alumnos.filter(function(m){
     return m.alumno.toLowerCase().includes(q)
       ||(m.titular||'').toLowerCase().includes(q)
@@ -3825,26 +3854,43 @@ function _renderAlumnosCards(){
     el.innerHTML='<div class="empty"><div class="empty-icon">🎓</div><h3>'+t('alm_sin_alumnos')+'</h3></div>';
     return;
   }
-  el.innerHTML='<div style="display:flex;flex-direction:column;gap:10px;margin-top:4px">'
-    +alumnos.map(function(m){
-      var cursosCount=STATE.matrículas.filter(function(x){return x.alumno===m.alumno;}).length;
-      var pago=pagados.has(m.alumno);
-      var ini=m.alumno.charAt(0).toUpperCase();
-      return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;display:flex;align-items:center;gap:14px">'
-        +'<div style="width:46px;height:46px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;flex-shrink:0">'+ini+'</div>'
-        +'<div style="flex:1;min-width:0">'
-        +'<div style="font-weight:700;font-size:14px;margin-bottom:2px">'+esc(m.alumno)+'</div>'
-        +'<div style="font-size:12px;color:var(--text3)">'+esc(m.curso)+(cursosCount>1?' + '+(cursosCount-1)+' más':'')+'</div>'
-        +(m.email?'<div style="font-size:11px;color:var(--text3);margin-top:2px">'+esc(m.email)+'</div>':'')
-        +'</div>'
-        +'<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">'
-        +(pago?'<span class="badge badge-green" style="font-size:10px">✓ Pagó</span>'
-              :'<span class="badge badge-red" style="font-size:10px">Pendiente</span>')
-        +'<button class="btn-primary btn-sm" onclick="showFichaAlumno('+m.folio+')" style="font-size:11px;padding:5px 10px">'
-        +'<i class="ti ti-id-badge-2"></i> Ver ficha</button>'
-        +'</div></div>';
-    }).join('')
-    +'</div>';
+  var nTotal=alumnos.length;
+  var nNuevosAlm=alumnos.filter(function(m){return esNuevoEsteMes(m.alumno);}).length;
+  var nAnteriores=nTotal-nNuevosAlm;
+  var resumenBar=nNuevosAlm>0
+    ?('<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 16px;margin-bottom:10px;display:flex;gap:20px;font-size:12px;flex-wrap:wrap;align-items:center">'
+      +'<span style="color:var(--text2)"><strong style="color:var(--text)">'+nTotal+'</strong> alumno'+(nTotal===1?'':'s')+(q?' encontrado'+(nTotal===1?'':'s'):'')+'</span>'
+      +'<span style="color:var(--text3)">|</span>'
+      +'<span style="color:var(--text2)">Anteriores: <strong style="color:var(--text)">'+nAnteriores+'</strong></span>'
+      +'<span style="color:var(--text3)">|</span>'
+      +'<span style="color:var(--accent);font-weight:700">🆕 Nuevos este mes: <strong>'+nNuevosAlm+'</strong></span>'
+      +'</div>')
+    :('<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 16px;margin-bottom:10px;font-size:12px;color:var(--text2)">'
+      +'<strong style="color:var(--text)">'+nTotal+'</strong> alumno'+(nTotal===1?'':'s')+(q?' encontrado'+(nTotal===1?'':'s'):'')
+      +'</div>');
+  el.innerHTML=resumenBar+'<div style="display:flex;flex-direction:column;gap:10px">'+alumnos.map(function(m){
+    var misMatriculas=(STATE.matrículas||[]).filter(function(x){return x.alumno===m.alumno;});
+    var cursosCount=misMatriculas.length;
+    var pago=misMatriculas.every(matriculaCubierta);
+    var esNuevo=esNuevoEsteMes(m.alumno);
+    var ini=m.alumno.charAt(0).toUpperCase();
+    var cardBorder=esNuevo?'border:1.5px solid var(--accent)':'border:1px solid var(--border)';
+    return '<div style="background:var(--surface);'+cardBorder+';border-radius:12px;padding:16px;display:flex;align-items:center;gap:14px">'
+      +'<div style="width:46px;height:46px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;flex-shrink:0">'+ini+'</div>'
+      +'<div style="flex:1;min-width:0">'
+      +'<div style="font-weight:700;font-size:14px;margin-bottom:2px">'+esc(m.alumno)
+        +(esNuevo?' <span style="font-size:9px;background:var(--accent);color:#fff;border-radius:4px;padding:1px 6px;vertical-align:middle;font-weight:700">🆕 NUEVO</span>':'')
+      +'</div>'
+      +'<div style="font-size:12px;color:var(--text3)">'+esc(m.curso)+(cursosCount>1?' + '+(cursosCount-1)+' más':'')+'</div>'
+      +(m.email?'<div style="font-size:11px;color:var(--text3);margin-top:2px">'+esc(m.email)+'</div>':'')
+      +'</div>'
+      +'<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">'
+      +(pago?'<span class="badge badge-green" style="font-size:10px">✓ Pagó</span>'
+            :'<span class="badge badge-red" style="font-size:10px">Pendiente</span>')
+      +'<button class="btn-primary btn-sm" onclick="showFichaAlumno('+m.folio+')" style="font-size:11px;padding:5px 10px">'
+      +'<i class="ti ti-id-badge-2"></i> Ver ficha</button>'
+      +'</div></div>';
+  }).join('')+'</div>';
 }
 
 function renderAlumnos(){
@@ -5503,14 +5549,14 @@ async function darDeBaja(folio) {
 
 async function eliminarMatriculaPermanente(folio) {
   const m=STATE.matrículas.find(x=>x.folio===folio);
-  const pagosDelFolio=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio===folio);
+  const pagosDelFolio=(STATE.pagosRegulares||[]).filter(p=>String(p.crmFolio)===String(folio));
   let msg=t('baja_elim_confirm')+(m?.alumno||'')+'?';
   if(pagosDelFolio.length>0){
     msg+='\n\n🔴 ATENCIÓN: Esta matrícula tiene '+pagosDelFolio.length+' pago'+(pagosDelFolio.length!==1?'s':'')+' registrado'+(pagosDelFolio.length!==1?'s':'')+' ('+pagosDelFolio.map(p=>(p.meses||[]).join(', ')).join(' | ')+').\nAl eliminar la matrícula, esos pagos también se borrarán del CRM y de Contabilidad automáticamente.';
   }
   if(!confirm(msg))return;
   STATE.matrículas=STATE.matrículas.filter(x=>x.folio!==folio);
-  STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio!==folio);
+  STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(p=>String(p.crmFolio)!==String(folio));
   if(STATE.autorizacionesPago) STATE.autorizacionesPago=STATE.autorizacionesPago.filter(a=>a.folio!==folio||a.estado!=='pendiente');
   await saveState();
   closeModal();
