@@ -3670,46 +3670,63 @@ async function repararPagosPaquete(){
   if(!hasPerm('modo_dios')){alert('Solo el Modo Dios puede usar esta función.');return;}
   var pagosReg=STATE.pagosRegulares||[];
   var mats=STATE.matrículas||[];
-  // Encontrar matrículas en paquete cuyo folio no tiene pago en pagosRegulares
-  var foliosSinPago=mats.filter(function(m){
-    if(!m.enPaquete||!(m.paqueteFolios&&m.paqueteFolios.length>1)) return false;
-    return !pagosReg.some(function(p){return String(p.crmFolio)===String(m.folio);});
+  // Identificar todos los grupos de paquetes únicos
+  var paquetesMap={};
+  mats.filter(function(m){return m.enPaquete&&m.paqueteFolios&&m.paqueteFolios.length>1;}).forEach(function(m){
+    var key=[...m.paqueteFolios].sort(function(a,b){return a-b;}).join(',');
+    if(!paquetesMap[key]) paquetesMap[key]=m.paqueteFolios;
   });
-  if(foliosSinPago.length===0){
-    alert('✅ Todos los folios de paquete tienen su pago registrado.');return;
-  }
-  var detalle=foliosSinPago.map(function(m){return '#'+m.folio+' ('+m.alumno+' — '+m.curso+')';}).join('\n');
-  if(!confirm('Se crearán pagos faltantes para '+foliosSinPago.length+' folio(s):\n\n'+detalle+'\n\nEl monto se calculará proporcional al paquete. ¿Continuar?'))return;
-  foliosSinPago.forEach(function(m){
-    // Buscar el pago del master del mismo paquete
-    var pagoMaster=pagosReg.find(function(p){
-      return m.paqueteFolios.map(String).includes(String(p.crmFolio))&&!p.paqueteSlave;
-    });
-    var n=(m.paqueteFolios||[]).length||1;
-    var totalPaquete=pagoMaster?pagoMaster.paqueteTotal||pagoMaster.montoFinal*n:m.primerPago||0;
+  var cambios=[];
+  Object.values(paquetesMap).forEach(function(folios){
+    var n=folios.length;
+    // Buscar pago existente del paquete (cualquier folio del grupo)
+    var pagoMaster=pagosReg.find(function(p){return folios.map(String).includes(String(p.crmFolio));});
+    var totalPaquete=pagoMaster?pagoMaster.paqueteTotal||pagoMaster.montoFinal:0;
+    if(!totalPaquete) totalPaquete=mats.find(function(m){return String(m.folio)===String(folios[0]);})?.primerPago||0;
     var montoFolio=Math.floor(totalPaquete/n);
-    var commF=0,ivaF=0,netoF=montoFolio;
     var metodo=pagoMaster?pagoMaster.method||'cash':'cash';
-    if(metodo==='card'){commF=+(montoFolio*0.035).toFixed(2);ivaF=+(commF*0.16).toFixed(2);netoF=+(montoFolio-commF-ivaF).toFixed(2);}
-    STATE.pagosRegulares.push({
-      id:uid(),alumnoNombre:m.alumno,crmFolio:m.folio,curso:m.curso,
-      meses:[monthStr()],mesesCount:1,
-      montoBase:montoFolio,subtotal:montoFolio,
-      promoId:null,promoNombre:null,descuentoMonto:0,
-      montoFinal:montoFolio,commMP:commF,ivaMP:ivaF,neto:netoF,
-      method:metodo,
-      fecha:pagoMaster?pagoMaster.fecha:fmtFecha(todayISO()),
-      fechaISO:pagoMaster?pagoMaster.fechaISO:todayISO(),
-      notas:'[Reparado] Pago de paquete '+(m.paqueteFolios||[]).length+' grupos — Total $'+totalPaquete.toLocaleString('es-MX')+' — Folios #'+(m.paqueteFolios||[]).join(', #'),
-      paqueteFolios:[...(m.paqueteFolios||[])],
-      paqueteTotal:totalPaquete,
-      paqueteSlave:true, // no genera nuevo ingreso en Contabilidad (el master ya lo tiene)
-      createdAt:new Date().toISOString(),createdBy:currentUser.username
+    var fechaISO=pagoMaster?pagoMaster.fechaISO:todayISO();
+    var notasPaquete='Paquete '+n+' grupos — Total $'+totalPaquete.toLocaleString('es-MX')+' — Folios #'+folios.join(', #');
+    folios.forEach(function(folio,idx){
+      var pagoExistente=pagosReg.find(function(p){return String(p.crmFolio)===String(folio);});
+      if(!pagoExistente){
+        // Crear pago faltante
+        var commF=0,ivaF=0,netoF=montoFolio;
+        if(metodo==='card'){commF=+(montoFolio*0.035).toFixed(2);ivaF=+(commF*0.16).toFixed(2);netoF=+(montoFolio-commF-ivaF).toFixed(2);}
+        STATE.pagosRegulares.push({
+          id:uid(),alumnoNombre:(mats.find(function(m){return String(m.folio)===String(folio);})||{}).alumno||'',
+          crmFolio:folio,curso:(mats.find(function(m){return String(m.folio)===String(folio);})||{}).curso||'',
+          meses:[monthStr()],mesesCount:1,
+          montoBase:montoFolio,subtotal:montoFolio,
+          promoId:null,promoNombre:null,descuentoMonto:0,
+          montoFinal:montoFolio,commMP:commF,ivaMP:ivaF,neto:netoF,
+          method:metodo,fecha:fmtFecha(fechaISO),fechaISO,
+          notas:notasPaquete,
+          paqueteFolios:[...folios],paqueteTotal:totalPaquete,paqueteSlave:idx>0,
+          createdAt:new Date().toISOString(),createdBy:currentUser.username
+        });
+        cambios.push('Creado pago #'+folio+' ($'+montoFolio.toLocaleString('es-MX')+')');
+      } else if(pagoExistente.montoFinal!==montoFolio||pagoExistente.montoFinal===totalPaquete){
+        // Corregir monto del pago existente si tiene el total del paquete en lugar del monto por folio
+        pagoExistente.montoFinal=montoFolio;
+        pagoExistente.montoBase=montoFolio;
+        pagoExistente.subtotal=montoFolio;
+        var commF2=0,ivaF2=0,netoF2=montoFolio;
+        if(metodo==='card'){commF2=+(montoFolio*0.035).toFixed(2);ivaF2=+(commF2*0.16).toFixed(2);netoF2=+(montoFolio-commF2-ivaF2).toFixed(2);}
+        pagoExistente.commMP=commF2;pagoExistente.ivaMP=ivaF2;pagoExistente.neto=netoF2;
+        pagoExistente.paqueteFolios=[...folios];
+        pagoExistente.paqueteTotal=totalPaquete;
+        pagoExistente.paqueteSlave=idx>0;
+        pagoExistente.notas=notasPaquete;
+        pagoExistente.editadoEn=new Date().toISOString();
+        cambios.push('Corregido pago #'+folio+' → $'+montoFolio.toLocaleString('es-MX')+' (era $'+totalPaquete.toLocaleString('es-MX')+')');
+      }
     });
   });
+  if(cambios.length===0){alert('✅ Todos los pagos de paquete ya están correctos ($1 por folio, no $total).');return;}
   await saveState();
   renderPagos();buildSidebar();
-  setTimeout(function(){alert('✅ '+foliosSinPago.length+' pago(s) creados. Los folios ya no aparecerán como pendientes.');},200);
+  setTimeout(function(){alert('✅ '+cambios.length+' corrección(es) aplicada(s).\n\n'+cambios.join('\n'));},200);
 }
 
 async function limpiarPagosHuerfanosCRM(){
