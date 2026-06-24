@@ -8167,6 +8167,33 @@ async function adminFinalizarSesion(sesionId, rol){
   showModalSesionesInstructor(instrId, s.mes);
 }
 
+async function borrarTodasHorasInstructor(instrId, mes){
+  var p=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
+  if(!p) return;
+  var altIds=p.userId?[instrId,p.userId]:[instrId];
+  var sesiones=(STATE.sesionesClase||[]).filter(function(s){
+    return s.mes===mes&&(altIds.indexOf(s.instructorId)>=0||altIds.indexOf(s.asistenteId)>=0);
+  });
+  if(sesiones.length===0){alert('No hay horas registradas para '+p.nombre+' en el mes '+mes+'.');return;}
+  if(!confirm('Borrar TODAS las horas de '+p.nombre+' en '+mes+'?\n\n'+sesiones.length+' sesion(es) seran eliminadas.\nEsto no se puede deshacer.'))return;
+  sesiones.forEach(function(s){
+    var yoSoyP=altIds.indexOf(s.instructorId)>=0;
+    var yoSoyA=altIds.indexOf(s.asistenteId)>=0;
+    if(yoSoyP){s.tramosP=[];s.horasInstructor=0;s.estadoP=null;}
+    if(yoSoyA){s.tramosA=[];s.horasAsistente=0;s.estadoA=null;}
+  });
+  // Eliminar sesiones que quedaron completamente vacías
+  STATE.sesionesClase=(STATE.sesionesClase||[]).filter(function(s){
+    var vacioP=!s.estadoP&&!(s.tramosP&&s.tramosP.length);
+    var vacioA=!s.estadoA&&!(s.tramosA&&s.tramosA.length);
+    return !(vacioP&&vacioA);
+  });
+  await saveState();
+  closeModal();
+  renderMaestros();
+  setTimeout(function(){alert('✅ Horas de '+p.nombre+' eliminadas para el mes '+mes+'.');},200);
+}
+
 async function adminBorrarSesion(sesionId, instrId, rol){
   // Solo borra los datos DEL ROL de este instructor en esta sesión — NO afecta al otro rol.
   var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
@@ -8391,7 +8418,7 @@ function showModalSesionesInstructor(instrId, mesVer){
     +'<div class="modal" style="max-width:580px;max-height:90vh;overflow-y:auto">'
     +'<div class="modal-hdr" style="position:sticky;top:0;background:var(--surface);z-index:1">'
     +'<div class="modal-title">📅 Calendario de clases — '+p.nombre+'</div>'
-    +'<button class="modal-close" onclick="closeModal()">✕</button></div>'
+    +'<div style="display:flex;gap:8px;align-items:center">'    +(hasPerm('modo_dios')?'<button class="btn-danger btn-sm" onclick="borrarTodasHorasInstructor(\''+instrId+'\',\''+cm+'\')">🗑 Borrar todas las horas del mes</button>':'')    +'<button class="modal-close" onclick="closeModal()">✕</button></div></div>'
     +'<div class="modal-body" style="padding:16px">'
     +'<div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:10px">'
     +'<button class="btn-ghost btn-sm" onclick="showModalSesionesInstructor(\''+instrId+'\',\''+mesAnteriorStr+'\')">‹ Mes anterior</button>'
