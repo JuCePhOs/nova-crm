@@ -7165,6 +7165,8 @@ async function guardarMatriculasMultiples(){
   // Create one matrícula per group
   var foliosCreados=[];
   var nombresCreados=[];
+  var tipoPagoElM=document.getElementById('f-tipopago');
+  var pagoTipoMulti=(tipoPagoElM&&tipoPagoElM.value)==='unico'?'unico':'mensual';
   gruposSelIds.forEach(function(gid,idx){
     var grupo=cursoObj?cursoObj.grupos.find(function(g){return g.id===gid;}):null;
     var folio=STATE.nextFolio++;
