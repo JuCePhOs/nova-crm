@@ -1247,11 +1247,18 @@ function buildSidebar(){
     </div>`).join('');
 }
 function pendingPayments(){
-  // FIX: usar folio para coincidir con buildPendientes y evitar que un pago de curso A
-  // oculte la pendencia de curso B del mismo alumno (o type mismatch string/number).
   const cm=monthStr();
+  // Folios con pago este mes (para matrículas mensuales)
   const pagados=new Set((STATE.pagosRegulares||[]).filter(p=>p.meses&&p.meses.includes(cm)).map(p=>String(p.crmFolio)));
-  return (STATE.matrículas||[]).filter(m=>!pagados.has(String(m.folio))).length||0;
+  // Folios con CUALQUIER pago (para matrículas de pago único — pagaron una vez, no vuelven a pagar)
+  const conPagoUnico=new Set((STATE.matrículas||[])
+    .filter(m=>m.pagoTipo==='unico')
+    .filter(m=>(STATE.pagosRegulares||[]).some(p=>String(p.crmFolio)===String(m.folio)))
+    .map(m=>String(m.folio)));
+  return (STATE.matrículas||[]).filter(m=>{
+    if(conPagoUnico.has(String(m.folio))) return false; // pago único ya cobrado
+    return !pagados.has(String(m.folio));
+  }).length||0;
 }
 const VIEWS={dashboard:renderDashboard,matriculas:renderMatriculas,pagos:renderPagos,alumnos:renderAlumnos,cursos:renderCursos,usuarios:renderUsuarios,proyeccion:renderProyeccion,inactivos:renderInactivos,dios:renderModoDios,maestros:renderMaestros,clases:renderClasesInstructor,cursos_inst:renderCursosInstructor,horarios:renderHorarios,horarios_admin:renderHorariosAdmin,asistencias_admin:renderAsistenciasAdmin};
 function navigate(tab){
@@ -3758,7 +3765,15 @@ function buildPendientes(){
   const pagosMes=(STATE.pagosRegulares||[]).filter(p=>p.meses&&p.meses.includes(cm));
   // String() normaliza el tipo para evitar mismatch entre string/number en crmFolio
   const pagados=new Set(pagosMes.map(p=>String(p.crmFolio)));
-  const pendientes=(STATE.matrículas||[]).filter(m=>!pagados.has(String(m.folio)));
+  // Excluir matrículas de pago único que ya tienen algún pago registrado
+  const conPagoUnicoB=new Set((STATE.matrículas||[])
+    .filter(m=>m.pagoTipo==='unico')
+    .filter(m=>(STATE.pagosRegulares||[]).some(p=>String(p.crmFolio)===String(m.folio)))
+    .map(m=>String(m.folio)));
+  const pendientes=(STATE.matrículas||[]).filter(m=>{
+    if(conPagoUnicoB.has(String(m.folio))) return false;
+    return !pagados.has(String(m.folio));
+  });
   if(pendientes.length===0)return`<div class="empty"><div class="empty-icon">🎉</div><h3>¡Todos pagaron!</h3><p>${t('pag_pend_vacia_sub')} ${mesLabel(cm)}</p></div>`;
   // Separar pendientes: anteriores (base mínima garantizada) vs nuevos este mes
   const folioNuevos=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>String(m.folio)));
