@@ -7175,7 +7175,7 @@ async function guardarMatriculasMultiples(){
     STATE.matrículas.push({
       folio,alumno,nacimiento:nac,curso,titular,email,telefono:tel,
       primerPago:dist[idx]||precioPorGrupo,
-      pagoTipo:'unico', // Inscripción por grupo = pago único (ya cobrado completo al inscribir, no recurrente)
+      pagoTipo:pagoTipoMulti,
       fecha:fmtFecha(fechaISO),fechaISO,
       grupoId:gid,
       grupoNombre:grupo?grupo.nombre:'',
@@ -8213,8 +8213,8 @@ async function borrarTodasHorasInstructor(instrId, mes){
   sesiones.forEach(function(s){
     var yoSoyP=altIds.indexOf(s.instructorId)>=0;
     var yoSoyA=altIds.indexOf(s.asistenteId)>=0;
-    if(yoSoyP){s.tramosP=[];s.horasInstructor=0;s.estadoP=null;}
-    if(yoSoyA){s.tramosA=[];s.horasAsistente=0;s.estadoA=null;}
+    if(yoSoyP){s.tramosP=[];s.horasInstructor=0;s.estadoP=null;s.instructorId=null;}
+    if(yoSoyA){s.tramosA=[];s.horasAsistente=0;s.estadoA=null;s.asistenteId=null;}
   });
   // Eliminar sesiones que quedaron completamente vacías
   STATE.sesionesClase=(STATE.sesionesClase||[]).filter(function(s){
@@ -8235,9 +8235,9 @@ async function adminBorrarSesion(sesionId, instrId, rol){
   var rolLabel=rol==='principal'?'Instructor Principal':'Instructor Asistente';
   if(!confirm('¿Borrar las horas de '+rolLabel+' en esta sesión?\n\nSolo afecta a este instructor y este día. El otro rol (si existe) no se modifica.')) return;
   if(rol==='principal'){
-    s.tramosP=[]; s.horasInstructor=0; s.estadoP=null;
+    s.tramosP=[]; s.horasInstructor=0; s.estadoP=null; s.instructorId=null;
   } else {
-    s.tramosA=[]; s.horasAsistente=0; s.estadoA=null;
+    s.tramosA=[]; s.horasAsistente=0; s.estadoA=null; s.asistenteId=null;
   }
   // Si la sesión quedó completamente vacía (ningún rol con datos), eliminarla del todo
   var vacioP=!s.estadoP && !(s.tramosP&&s.tramosP.length);
