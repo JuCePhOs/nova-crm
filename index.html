@@ -2723,23 +2723,25 @@ async function descargarContrato(folio){
         children:[
           pa([ar('Anexo 1 — Sobre Precios y Formas de Pago',{b:true,sz:11})],{al:AL.CENTER,sp:120}),
           pa([ar('Los pagos se realizarán a más tardar los 15 de cada mes. Un atraso genera un cargo de $200 pesos por semana.')],{sp:80}),
-          pa([ar('El primer pago según la forma de pago elegida: '),ar(PA+' MXN Pesos.',{b:true})],{sp:80}),
+          pa([ar('El primer pago según la forma de pago elegida: '),ar(PA+'.',{b:true})],{sp:80}),
           pa(esUnico
             ?[ar('Este es un pago único; no aplican pagos subsecuentes.',{b:true})]
-            :[ar('Pagos mensuales siguientes de: '),ar(PM+' MXN Pesos.',{b:true})]
+            :[ar('Pagos mensuales siguientes de: '),ar(PM+'.',{b:true})]
           ,{sp:160}),
-          sigTbl(TI+' / ______________________','','CUSTOMER: '+TI,''),
+          pa([ar(TI+' /')],{sp:240}),
+          pa([ar('_________________________')],{sp:40}),
+          pa([ar('CUSTOMER: '+TI)],{sp:160}),
           pa([ar('')],{sp:160}),
           pa([ar('Factura en virtud del contrato Nº '+FO+' de '+FE+'.')],{sp:80}),
-          pa([ar('Formas de Pago:',{b:true})],{sp:80}),
+          pa([ar('Formas de Pago:',{b:true})],{sp:200}),
           pa([ar('PAGO BANCARIO (SUCURSAL O PORTAL EN LÍNEA):',{b:true})],{sp:60}),
-          pa([ar('Beneficiario: Julio César Pheres Osorio  |  Banco: BBVA  |  Cuenta: 1504690446  |  CLABE: 012180015046904461')],{sp:80}),
+          pa([ar('Beneficiario: Julio César Pheres Osorio  |  Banco: BBVA  |  Cuenta: 1504690446  |  CLABE: 012180015046904461')],{sp:200}),
           pa([ar('PAGO EN OXXO O 7-ELEVEN:',{b:true})],{sp:60}),
           pa([ar('Número de tarjeta: 415231412172885.')],{sp:60}),
-          pa([ar('Enviar comprobante por WhatsApp al 5526896264.')],{sp:80}),
+          pa([ar('Enviar comprobante por WhatsApp al 5526896264.')],{sp:200}),
           pa([ar('CONCEPTO DE PAGO:',{b:true})],{sp:60}),
           pa([ar('Colocar en el concepto: número de contrato y nombre del estudiante.')],{sp:60}),
-          pa([ar('Pago Contrato Nº '+FO+' — '+AL2+' — importe: '+PA+' MXN pesos.')],{sp:80}),
+          pa([ar('Pago Contrato Nº '+FO+' — '+AL2+' — importe: '+PA+'.')],{sp:80}),
           pa([ar('Debes pagar en un plazo de cinco días naturales y enviar el recibo. Sin pago el espacio quedará libre y la academia no tendrá responsabilidad de reservarlo para '+AL2+'.')],{sp:120}),
         ]
       }
