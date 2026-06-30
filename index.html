@@ -7165,8 +7165,8 @@ async function guardarMatriculasMultiples(){
   // Create one matrícula per group
   var foliosCreados=[];
   var nombresCreados=[];
-  var tipoPagoElM=document.getElementById('f-tipopago');
-  var pagoTipoMulti=(tipoPagoElM&&tipoPagoElM.value)==='unico'?'unico':'mensual';
+  var _chkTipoPago=document.querySelector('input[name="f-tipo-pago"]:checked');
+  var pagoTipoMulti=(_chkTipoPago&&_chkTipoPago.value==='unico')?'unico':'mensual';
   gruposSelIds.forEach(function(gid,idx){
     var grupo=cursoObj?cursoObj.grupos.find(function(g){return g.id===gid;}):null;
     var folio=STATE.nextFolio++;
@@ -8246,6 +8246,19 @@ async function adminBorrarSesion(sesionId, instrId, rol){
     STATE.sesionesClase=(STATE.sesionesClase||[]).filter(function(x){return x.id!==sesionId;});
   }
   await saveState();
+  // FIX: escribir directamente en Firebase para asegurar que asistenteId=null persista
+  // sin depender del listener que puede restaurar datos anteriores
+  if(db && s && s.id){
+    try{
+      var sIdx=(STATE.sesionesClase||[]).findIndex(function(x){return x.id===s.id;});
+      if(sIdx>=0){
+        await db.ref('nova_crm/sesionesClase/'+sIdx).update(
+          rol==='asistente'?{tramosA:[],horasAsistente:0,estadoA:null,asistenteId:null}
+                           :{tramosP:[],horasInstructor:0,estadoP:null,instructorId:null}
+        );
+      }
+    }catch(e){}
+  }
   showModalSesionesInstructor(instrId, s.mes);
 }
 
