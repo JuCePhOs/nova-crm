@@ -2680,10 +2680,10 @@ async function descargarContrato(folio){
     }
     // Logo: 200x82 (taller vertical) — same size both pages
     var logoKids=[];
-    try{if(typeof LOGO_URI!=='undefined'&&LOGO_URI&&LOGO_URI.includes(',')){var itype=LOGO_URI.includes('image/png')?'png':'jpg';var idata=Uint8Array.from(atob(LOGO_URI.split(',')[1]),function(c){return c.charCodeAt(0);});logoKids=[new Par({alignment:AL.CENTER,children:[new IR({data:idata,transformation:{width:180,height:60},type:itype})]})];}}catch(e){}
+    try{if(typeof LOGO_URI!=='undefined'&&LOGO_URI&&LOGO_URI.includes(',')){var idata=Uint8Array.from(atob(LOGO_URI.split(',')[1]),function(c){return c.charCodeAt(0);});var itype=(idata[0]===0xFF&&idata[1]===0xD8)?'jpg':'png';logoKids=[new Par({alignment:AL.CENTER,children:[new IR({data:idata,transformation:{width:180,height:60},type:itype})]})];}}catch(e){}
     var sharedHdr=new Hdr({children:logoKids});
     // Margins: 936 twips = 0.65" — same both pages
-    var pageProps={margin:{top:1800,right:1440,bottom:1440,left:1440,header:504},size:{width:12240,height:15840}};
+    var pageProps={margin:{top:1300,right:1440,bottom:720,left:1440,header:504},size:{width:12240,height:15840}};
     var dataTbl=new Tbl({width:{size:9360,type:WT.DXA},rows:[new TRw({children:[
       cell(4630,[pa([ar('LA INSTITUCIÓN',{b:true,sz:9})],{sp:80}),pa([ar('NOVA IA ACADEMY SC',{sz:9})],{sp:80}),pa([ar('Julio César Pheres Osorio',{sz:9})],{sp:80}),pa([ar('Casa de Obrero Mundial 410, Int. 501',{sz:9})],{sp:80}),pa([ar('Piedad Narvarte, Benito Juárez, C.P. 03000, CDMX.',{sz:9})],{sp:80}),pa([ar('BANCO: BBVA',{sz:9})],{sp:80}),pa([ar('CLABE: 012180015046904461',{sz:9})],{sp:80}),pa([ar('Cuenta: 1504690446',{sz:9})],{sp:80})],GB),
       cell(100,[pa([ar('')],{sp:0})],NB),
@@ -2709,11 +2709,11 @@ async function descargarContrato(folio){
           pa([ar('El costo y forma de pago se detallan en el Anexo 1. Los pagos se realizarán a más tardar el día 15 de cada mes. Un atraso genera un cargo de $200 pesos por semana.')],{sp:100}),
           pa([ar('IV. Rescisión del Contrato',{b:true,sz:11})],{sp:70}),
           pa([ar('El contrato podrá rescindirse por acuerdo entre las partes, por incumplimiento de pagos, por tres (3) o más inasistencias injustificadas, o por causas de fuerza mayor.')],{sp:100}),
+          pa([ar('Una vez realizado el pago correspondiente, éste no será reembolsable bajo ninguna circunstancia; sin embargo, EL CLIENTE podrá destinar dicho monto, total o parcialmente, al pago de cualquier otro curso o servicio ofrecido por LA INSTITUCIÓN.')],{sp:100}),
           pa([ar('V. Datos de las Partes',{b:true,sz:11})],{sp:80}),
           dataTbl,
-          pa([ar('')],{sp:100}),
-          // "2 renglones más" después de "actos regulatorios" = sp:760 (≈ 300 original + 460 extra)
-          pa([ar('Las partes conocen y aceptan la licencia para actividades educativas, el Reglamento de Régimen Interior y demás actos regulatorios:')],{sp:760}),
+          pa([ar('')],{sp:40}),
+          pa([ar('Las partes conocen y aceptan la licencia para actividades educativas, el Reglamento de Régimen Interior y demás actos regulatorios:')],{sp:200}),
           sigTbl('_________________________________','EL CLIENTE — '+TI,'_________________________________','NOVA IA ACADEMY SC — Julio César Pheres Osorio',60,40),
         ]
       },
