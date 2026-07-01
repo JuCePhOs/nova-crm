@@ -1872,7 +1872,7 @@ function renderDashboard(){
         if(cans[m.folio+'_'+s.mes]) return;
         var diff=Math.round((new Date(s.fechaISO)-new Date(hoy))/86400000);
         if(diff>=0&&diff<=7) alertas.push({m,s,diff});
-        else if(diff<0&&diff>=-3) alertas.push({m,s,diff}); // hasta 3 días vencidos
+        else if(diff<0) alertas.push({m,s,diff}); // vencidos: TODOS, sin importar cuánto tiempo lleven
       });
     });
     if(!alertas.length) return '';
@@ -1944,11 +1944,14 @@ function _renderMatTable(){
     +'<th style="width:80px"></th>'
     +'</tr></thead><tbody>'
     +list.map(function(m){
-      var pMes=STATE.pagosRegulares.filter(function(p){return p.alumnoNombre===m.alumno&&p.meses&&p.meses.includes(cm);});
+      var esUnicoDisp=m.pagoTipo==='unico';
+      var pMes=esUnicoDisp
+        ? STATE.pagosRegulares.filter(function(p){return String(p.crmFolio)===String(m.folio);})
+        : STATE.pagosRegulares.filter(function(p){return p.alumnoNombre===m.alumno&&p.meses&&p.meses.includes(cm);});
       var pagadoMes=pMes.length>0;
-      var pagosMesStr=pMes.map(function(p){return'$'+(p.monto||0).toLocaleString('es-MX');}).join(', ')||'';
+      var pagosMesStr=pMes.map(function(p){return'$'+(p.montoFinal||p.monto||0).toLocaleString('es-MX');}).join(', ')||'';
       var PM=fmtMXN(parseFloat(String((m.pagoMensual!=null?m.pagoMensual:m.primerPago)||0).replace(/[^0-9.]/g,'')));
-      var esUnico=m.pagoTipo==='unico';
+      var esUnico=esUnicoDisp;
       var pagoLabel=esUnico?('<span style="font-size:10px;color:var(--text3)">Pago único</span> '+fmtMXN(m.primerPago||0))
         :('1er: '+fmtMXN(m.primerPago||0)+(m.pagoMensual!=null&&m.pagoMensual!==m.primerPago?' <span style="color:var(--text3);font-size:11px">· Mensual: '+PM+'</span>':''));
       return '<tr>'
@@ -1956,7 +1959,10 @@ function _renderMatTable(){
         +'<td class="mono" style="font-weight:600">#'+m.folio+'</td>'
         +'<td><div style="font-weight:600">'+esc(m.alumno)+'</div>'+(m.titular&&m.titular!==m.alumno?'<div style="font-size:11px;color:var(--text3)">'+esc(m.titular)+'</div>':'')+'</td>'
         +'<td>'+esc(m.curso||'—')+(m.grupoNombre?'<br><span style="font-size:11px;color:var(--text3)">'+esc(m.grupoNombre)+'</span>':'')+'</td>'
-        +'<td>'+pagoLabel+(pagadoMes?'<br><span style="font-size:10px;color:var(--green)">✓ Pagado '+cm+': '+pagosMesStr+'</span>':'')+'</td>'
+        +'<td>'+pagoLabel+(pagadoMes?(esUnico
+        ?'<br><span style="font-size:10px;color:var(--green)">✓ Pagado: '+pagosMesStr+'</span>'
+        :'<br><span style="font-size:10px;color:var(--green)">✓ Pagado '+cm+': '+pagosMesStr+'</span>')
+        :'<br><span style="font-size:10px;color:var(--danger)">✗ No pagado</span>')+'</td>'
         +'<td style="font-size:12px;color:var(--text3)">'+(m.fecha||'—')+'</td>'
         +'<td style="text-align:right;white-space:nowrap;padding:4px 8px">'
         +(hasPerm('editar_matriculas')?'<button class="btn-ghost btn-sm" onclick="showModalEditarMatricula('+m.folio+')" style="margin-right:4px"><i class="ti ti-edit"></i></button>':'')
@@ -4091,16 +4097,16 @@ function _filtrarCursos(){
 }
 
 async function showModalAlumnosGrupo(cursoNombre, grupoId){
+  var mc=document.getElementById('modal-container');
+  if(!mc){alert('Error: modal-container no encontrado');return;}
   var curso=(STATE.cursos||[]).find(function(c){return c.nombre===cursoNombre;});
   var grupo=curso?(curso.grupos||[]).find(function(g){return g.id===grupoId;}):null;
   var grupoLabel=grupo?grupo.nombre:'Sin grupo';
   var mats=(STATE.matrículas||[]).filter(function(m){
     return m.curso===cursoNombre&&m.grupoId===grupoId;
   });
-  var todosLosCursos=(STATE.cursos||[]);
   window._agCursoNombre=cursoNombre;
   window._agGrupoId=grupoId;
-  window._agMats=mats;
   window._agSel=new Set();
   window._agBuildGrupoOpts=function(cursoN,excGrupoId){
     var c=(STATE.cursos||[]).find(function(x){return x.nombre===cursoN;});
@@ -4110,43 +4116,42 @@ async function showModalAlumnosGrupo(cursoNombre, grupoId){
         return '<option value="'+esc(g.id)+'">'+esc(g.nombre)+'</option>';
       }).join('');
   };
-
-  function actualizarBulkBar(){
+  window._agToggle=function(folio){
+    var f=String(folio);
+    if(window._agSel.has(f)) window._agSel.delete(f); else window._agSel.add(f);
     var bar=document.getElementById('ag-bulk-bar');
     var cnt=document.getElementById('ag-selcount');
     if(bar) bar.style.display=window._agSel.size>0?'flex':'none';
     if(cnt) cnt.textContent=window._agSel.size+' seleccionado'+(window._agSel.size===1?'':'s');
     var allChk=document.getElementById('agchk-all');
-    if(allChk){
-      allChk.checked=window._agSel.size===mats.length&&mats.length>0;
-      allChk.indeterminate=window._agSel.size>0&&window._agSel.size<mats.length;
-    }
-  }
-  window._agToggle=function(folio){
-    var f=String(folio);
-    if(window._agSel.has(f)) window._agSel.delete(f); else window._agSel.add(f);
-    actualizarBulkBar();
+    if(allChk){allChk.checked=window._agSel.size===mats.length&&mats.length>0;allChk.indeterminate=window._agSel.size>0&&window._agSel.size<mats.length;}
     var row=document.getElementById('ag-row-'+f);
     if(row) row.style.background=window._agSel.has(f)?'var(--accent-light)':'';
   };
   window._agToggleAll=function(){
     var all=document.getElementById('agchk-all');
     if(!all) return;
-    if(all.checked){ mats.forEach(function(m){window._agSel.add(String(m.folio));}); }
-    else{ window._agSel.clear(); }
+    if(all.checked){mats.forEach(function(m){window._agSel.add(String(m.folio));});}
+    else{window._agSel.clear();}
     mats.forEach(function(m){
       var chk=document.getElementById('agchk-f'+m.folio);
       if(chk) chk.checked=all.checked;
       var row=document.getElementById('ag-row-'+m.folio);
       if(row) row.style.background=all.checked?'var(--accent-light)':'';
     });
-    actualizarBulkBar();
+    var bar=document.getElementById('ag-bulk-bar');
+    var cnt=document.getElementById('ag-selcount');
+    if(bar) bar.style.display=window._agSel.size>0?'flex':'none';
+    if(cnt) cnt.textContent=window._agSel.size+' seleccionado'+(window._agSel.size===1?'':'s');
   };
   window._agCursoBulkChange=function(){
     var c=document.getElementById('ag-bulk-curso');
     var go=document.getElementById('ag-bulk-grupo');
     if(c&&go) go.innerHTML=window._agBuildGrupoOpts(c.value,grupoId);
   };
+
+  var folioPIDs=JSON.stringify(mats.map(function(m){return String(m.folio);}));
+  var cursoOpts=(STATE.cursos||[]).map(function(c2){return '<option value="'+esc(c2.nombre)+'">'+esc(c2.nombre)+'</option>';}).join('');
 
   var tbodyRows=mats.length===0
     ?'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">Sin alumnos en este grupo</td></tr>'
@@ -4163,35 +4168,41 @@ async function showModalAlumnosGrupo(cursoNombre, grupoId){
       +'</tr>';
     }).join('');
 
-  var folioPIDs=JSON.stringify(mats.map(function(m){return String(m.folio);}));
-  var cursoOpts=todosLosCursos.map(function(c2){return '<option value="'+esc(c2.nombre)+'">'+esc(c2.nombre)+'</option>';}).join('');
-
-  var html2=''
-    +'<div style="font-size:11px;color:var(--text3);margin-bottom:12px">'+esc(cursoNombre)+' — '+esc(grupoLabel)+' — '+mats.length+' alumno'+(mats.length!==1?'s':'')+'</div>'
-    +'<div id="ag-bulk-bar" style="display:none;align-items:center;gap:8px;background:var(--accent-light);border:1px solid var(--accent);border-radius:8px;padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">'
-      +'<span id="ag-selcount" style="font-size:12px;font-weight:600;color:var(--accent)">0 seleccionados</span>'
-      +'<span style="color:var(--text3);font-size:11px">|</span>'
-      +'<select id="ag-bulk-curso" onchange="_agCursoBulkChange()" style="font-size:11px;padding:3px 6px;border-radius:5px;background:var(--surface);color:var(--text);border:1px solid var(--border)">'
-        +'<option value="">-- Mover a curso --</option>'+cursoOpts
-      +'</select>'
-      +'<select id="ag-bulk-grupo" style="font-size:11px;padding:3px 6px;border-radius:5px;background:var(--surface);color:var(--text);border:1px solid var(--border)">'
-        +'<option value="">-- Grupo --</option>'
-      +'</select>'
-      +'<button class="btn-primary btn-sm" style="font-size:11px" onclick="moverSeleccionadosGrupo()"><i class="ti ti-arrows-transfer-down"></i> Mover</button>'
-      +'<button class="btn-danger btn-sm" style="font-size:11px" onclick="quitarSeleccionadosGrupo()"><i class="ti ti-user-minus"></i> Quitar del grupo</button>'
+  mc.innerHTML='<div class="moverlay">'
+    +'<div class="modal" style="max-width:700px;max-height:90vh;display:flex;flex-direction:column">'
+    +'<div class="modal-hdr" style="flex-shrink:0">'
+      +'<div class="modal-title">👥 Alumnos: '+esc(grupoLabel)+'</div>'
+      +'<button class="modal-close" onclick="closeModal()">✕</button>'
     +'</div>'
-    +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
-      +'<thead><tr style="border-bottom:2px solid var(--border);font-size:11px;color:var(--text2)">'
-        +'<th style="padding:6px 10px;width:36px"><input type="checkbox" id="agchk-all" onchange="_agToggleAll()" style="width:16px;height:16px;cursor:pointer"></th>'
-        +'<th style="padding:6px 8px;text-align:left">Folio</th>'
-        +'<th style="padding:6px 8px;text-align:left">Alumno</th>'
-        +'<th style="padding:6px 8px;text-align:left">Curso / Grupo</th>'
-        +'<th style="padding:6px 8px;text-align:left">Acciones</th>'
-      +'</tr></thead>'
-      +'<tbody>'+tbodyRows+'</tbody>'
-    +'</table></div>';
-
-  showModal('Alumnos del grupo: '+grupoLabel, html2, []);
+    +'<div class="modal-body" style="overflow-y:auto;flex:1">'
+      +'<div style="font-size:11px;color:var(--text3);margin-bottom:12px">'+esc(cursoNombre)+' — '+esc(grupoLabel)+' — '+mats.length+' alumno'+(mats.length!==1?'s':'')+'</div>'
+      +'<div id="ag-bulk-bar" style="display:none;align-items:center;gap:8px;background:var(--accent-light);border:1px solid var(--accent);border-radius:8px;padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">'
+        +'<span id="ag-selcount" style="font-size:12px;font-weight:600;color:var(--accent)">0 seleccionados</span>'
+        +'<span style="color:var(--text3);font-size:11px">|</span>'
+        +'<select id="ag-bulk-curso" onchange="_agCursoBulkChange()" style="font-size:11px;padding:3px 6px;border-radius:5px;background:var(--surface);color:var(--text);border:1px solid var(--border)">'
+          +'<option value="">-- Mover a curso --</option>'+cursoOpts
+        +'</select>'
+        +'<select id="ag-bulk-grupo" style="font-size:11px;padding:3px 6px;border-radius:5px;background:var(--surface);color:var(--text);border:1px solid var(--border)">'
+          +'<option value="">-- Grupo --</option>'
+        +'</select>'
+        +'<button class="btn-primary btn-sm" style="font-size:11px" onclick="moverSeleccionadosGrupo()"><i class="ti ti-arrows-transfer-down"></i> Mover</button>'
+        +'<button class="btn-danger btn-sm" style="font-size:11px" onclick="quitarSeleccionadosGrupo()"><i class="ti ti-user-minus"></i> Quitar del grupo</button>'
+      +'</div>'
+      +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
+        +'<thead><tr style="border-bottom:2px solid var(--border);font-size:11px;color:var(--text2)">'
+          +'<th style="padding:6px 10px;width:36px"><input type="checkbox" id="agchk-all" onchange="_agToggleAll()" style="width:16px;height:16px;cursor:pointer"></th>'
+          +'<th style="padding:6px 8px;text-align:left">Folio</th>'
+          +'<th style="padding:6px 8px;text-align:left">Alumno</th>'
+          +'<th style="padding:6px 8px;text-align:left">Curso / Grupo</th>'
+          +'<th style="padding:6px 8px;text-align:left">Acciones</th>'
+        +'</tr></thead>'
+        +'<tbody>'+tbodyRows+'</tbody>'
+      +'</table></div>'
+    +'</div>'
+    +'<div class="modal-footer" style="flex-shrink:0;padding:12px 20px;border-top:1px solid var(--border);text-align:right">'
+      +'<button class="btn-ghost" onclick="closeModal()">Cerrar</button>'
+    +'</div>'
+    +'</div></div>';
 }
 
 function moverAlumnoModal(folio){
@@ -8407,13 +8418,14 @@ async function adminFinalizarSesion(sesionId, rol){
 
 async function borrarTodasHorasInstructor(instrId, mes){
   var p=(STATE.instructores||[]).find(function(x){return x.id===instrId;});
-  if(!p) return;
-  var altIds=p.userId?[instrId,p.userId]:[instrId];
+  if(!p)return;
+  var altIds=[instrId,p.userId||'__none__'];
   var sesiones=(STATE.sesionesClase||[]).filter(function(s){
     return s.mes===mes&&(altIds.indexOf(s.instructorId)>=0||altIds.indexOf(s.asistenteId)>=0);
   });
   if(sesiones.length===0){alert('No hay horas registradas para '+p.nombre+' en el mes '+mes+'.');return;}
-  if(!confirm('Borrar TODAS las horas de '+p.nombre+' en '+mes+'?\n\n'+sesiones.length+' sesion(es) seran eliminadas.\nEsto no se puede deshacer.'))return;
+  if(!confirm('Borrar TODAS las horas de '+p.nombre+' en '+mes+'?\n\n'+sesiones.length+' sesion(es) seran eliminadas.\nEsto no se puede deshacer.')) return;
+  var sesionesIds=new Set(sesiones.map(function(s){return s.id;}));
   sesiones.forEach(function(s){
     var yoSoyP=altIds.indexOf(s.instructorId)>=0;
     var yoSoyA=altIds.indexOf(s.asistenteId)>=0;
@@ -8427,41 +8439,91 @@ async function borrarTodasHorasInstructor(instrId, mes){
     return !(vacioP&&vacioA);
   });
   await saveState();
+  // FIX: escribir a claves Firebase reales por sesionId
+  if(db){
+    try{
+      var snap=await db.ref('nova_crm/sesionesClase').once('value');
+      var fbVal=snap.val();
+      if(fbVal){
+        var entries=Array.isArray(fbVal)
+          ?fbVal.map(function(v,i){return[String(i),v];}).filter(function(e){return e[1];})
+          :Object.entries(fbVal);
+        var updates={};
+        entries.forEach(function(pair){
+          var key=pair[0]; var sess=pair[1];
+          if(!sess||!sesionesIds.has(sess.id)) return;
+          var yoP=altIds.indexOf(sess.instructorId)>=0;
+          var yoA=altIds.indexOf(sess.asistenteId)>=0;
+          var noP=!sess.estadoP&&!(sess.tramosP&&sess.tramosP.length);
+          var noA=!sess.estadoA&&!(sess.tramosA&&sess.tramosA.length);
+          if(noP&&noA){
+            updates[key]=null; // sesión vacía — borrar
+          } else {
+            if(yoP){updates[key+'/instructorId']=null;updates[key+'/tramosP']=null;updates[key+'/horasInstructor']=0;updates[key+'/estadoP']=null;}
+            if(yoA){updates[key+'/asistenteId']=null;updates[key+'/tramosA']=null;updates[key+'/horasAsistente']=0;updates[key+'/estadoA']=null;}
+          }
+        });
+        if(Object.keys(updates).length>0){
+          await db.ref('nova_crm/sesionesClase').update(updates);
+        }
+      }
+    }catch(e){console.error('borrarTodasHoras Firebase error:',e);}
+  }
   closeModal();
   renderMaestros();
-  setTimeout(function(){alert('✅ Horas de '+p.nombre+' eliminadas para el mes '+mes+'.');},200);
 }
 
 async function adminBorrarSesion(sesionId, instrId, rol){
-  // Solo borra los datos DEL ROL de este instructor en esta sesión — NO afecta al otro rol.
   var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
   if(!s)return;
   var rolLabel=rol==='principal'?'Instructor Principal':'Instructor Asistente';
-  if(!confirm('¿Borrar las horas de '+rolLabel+' en esta sesión?\n\nSolo afecta a este instructor y este día. El otro rol (si existe) no se modifica.')) return;
+  if(!confirm('¿Borrar las horas de '+rolLabel+' en esta sesión?\n\nSolo afecta a este instructor y este día.')) return;
   if(rol==='principal'){
     s.tramosP=[]; s.horasInstructor=0; s.estadoP=null; s.instructorId=null;
   } else {
     s.tramosA=[]; s.horasAsistente=0; s.estadoA=null; s.asistenteId=null;
   }
-  // Si la sesión quedó completamente vacía (ningún rol con datos), eliminarla del todo
-  var vacioP=!s.estadoP && !(s.tramosP&&s.tramosP.length);
-  var vacioA=!s.estadoA && !(s.tramosA&&s.tramosA.length);
-  if(vacioP && vacioA){
+  var vacioP=!s.estadoP&&!(s.tramosP&&s.tramosP.length);
+  var vacioA=!s.estadoA&&!(s.tramosA&&s.tramosA.length);
+  // Eliminar sesión de STATE si quedó vacía
+  if(vacioP&&vacioA){
     STATE.sesionesClase=(STATE.sesionesClase||[]).filter(function(x){return x.id!==sesionId;});
   }
+  // Guardar STATE completo
   await saveState();
-  // FIX: escribir directamente en Firebase para asegurar que asistenteId=null persista
-  // sin depender del listener que puede restaurar datos anteriores
-  if(db && s && s.id){
+  // FIX DEFINITIVO: leer claves REALES de Firebase (no índice JS que puede diferir)
+  // y escribir directo a la clave correcta por sesionId
+  if(db){
     try{
-      var sIdx=(STATE.sesionesClase||[]).findIndex(function(x){return x.id===s.id;});
-      if(sIdx>=0){
-        await db.ref('nova_crm/sesionesClase/'+sIdx).update(
-          rol==='asistente'?{tramosA:[],horasAsistente:0,estadoA:null,asistenteId:null}
-                           :{tramosP:[],horasInstructor:0,estadoP:null,instructorId:null}
-        );
+      var snap=await db.ref('nova_crm/sesionesClase').once('value');
+      var fbVal=snap.val();
+      if(fbVal){
+        var entries=Array.isArray(fbVal)
+          ?fbVal.map(function(v,i){return [String(i),v];}).filter(function(e){return e[1];})
+          :Object.entries(fbVal);
+        var updates={};
+        entries.forEach(function(pair){
+          var key=pair[0]; var sess=pair[1];
+          if(!sess||sess.id!==sesionId) return;
+          if(vacioP&&vacioA){
+            updates[key]=null; // borrar completamente
+          } else if(rol==='asistente'){
+            updates[key+'/asistenteId']=null;
+            updates[key+'/tramosA']=null;
+            updates[key+'/horasAsistente']=0;
+            updates[key+'/estadoA']=null;
+          } else {
+            updates[key+'/instructorId']=null;
+            updates[key+'/tramosP']=null;
+            updates[key+'/horasInstructor']=0;
+            updates[key+'/estadoP']=null;
+          }
+        });
+        if(Object.keys(updates).length>0){
+          await db.ref('nova_crm/sesionesClase').update(updates);
+        }
       }
-    }catch(e){}
+    }catch(e){console.error('adminBorrarSesion Firebase error:',e);}
   }
   showModalSesionesInstructor(instrId, s.mes);
 }
