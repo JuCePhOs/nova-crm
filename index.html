@@ -3981,7 +3981,7 @@ function _renderAlumnosCards(){
   var folioNuevosAlm=new Set((STATE.matrículas||[]).filter(function(m){return m.fechaISO&&m.fechaISO.startsWith(cm);}).map(function(m){return String(m.folio);}));
   function matriculaCubierta(x){
     if(x.pagoTipo==='unico'){
-      return folioTieneAlgunPago.has(String(x.folio))||(!x.autorizacionPendiente&&(x.primerPago||0)>0);
+      return folioTieneAlgunPago.has(String(x.folio));
     }
     return pagados.has(String(x.folio));
   }
@@ -4090,6 +4090,197 @@ function _filtrarCursos(){
   }
 }
 
+async function showModalAlumnosGrupo(cursoNombre, grupoId){
+  var curso=(STATE.cursos||[]).find(function(c){return c.nombre===cursoNombre;});
+  var grupo=curso?(curso.grupos||[]).find(function(g){return g.id===grupoId;}):null;
+  var grupoLabel=grupo?grupo.nombre:'Sin grupo';
+  var mats=(STATE.matrículas||[]).filter(function(m){
+    return m.curso===cursoNombre&&m.grupoId===grupoId;
+  });
+  var todosLosCursos=(STATE.cursos||[]);
+  window._agCursoNombre=cursoNombre;
+  window._agGrupoId=grupoId;
+  window._agMats=mats;
+  window._agSel=new Set();
+  window._agBuildGrupoOpts=function(cursoN,excGrupoId){
+    var c=(STATE.cursos||[]).find(function(x){return x.nombre===cursoN;});
+    if(!c||(c.grupos||[]).length===0) return '<option value="">Sin grupo (curso directo)</option>';
+    return '<option value="">-- Elegir grupo --</option>'
+      +(c.grupos||[]).filter(function(g){return g.id!==excGrupoId;}).map(function(g){
+        return '<option value="'+esc(g.id)+'">'+esc(g.nombre)+'</option>';
+      }).join('');
+  };
+
+  function actualizarBulkBar(){
+    var bar=document.getElementById('ag-bulk-bar');
+    var cnt=document.getElementById('ag-selcount');
+    if(bar) bar.style.display=window._agSel.size>0?'flex':'none';
+    if(cnt) cnt.textContent=window._agSel.size+' seleccionado'+(window._agSel.size===1?'':'s');
+    var allChk=document.getElementById('agchk-all');
+    if(allChk){
+      allChk.checked=window._agSel.size===mats.length&&mats.length>0;
+      allChk.indeterminate=window._agSel.size>0&&window._agSel.size<mats.length;
+    }
+  }
+  window._agToggle=function(folio){
+    var f=String(folio);
+    if(window._agSel.has(f)) window._agSel.delete(f); else window._agSel.add(f);
+    actualizarBulkBar();
+    var row=document.getElementById('ag-row-'+f);
+    if(row) row.style.background=window._agSel.has(f)?'var(--accent-light)':'';
+  };
+  window._agToggleAll=function(){
+    var all=document.getElementById('agchk-all');
+    if(!all) return;
+    if(all.checked){ mats.forEach(function(m){window._agSel.add(String(m.folio));}); }
+    else{ window._agSel.clear(); }
+    mats.forEach(function(m){
+      var chk=document.getElementById('agchk-f'+m.folio);
+      if(chk) chk.checked=all.checked;
+      var row=document.getElementById('ag-row-'+m.folio);
+      if(row) row.style.background=all.checked?'var(--accent-light)':'';
+    });
+    actualizarBulkBar();
+  };
+  window._agCursoBulkChange=function(){
+    var c=document.getElementById('ag-bulk-curso');
+    var go=document.getElementById('ag-bulk-grupo');
+    if(c&&go) go.innerHTML=window._agBuildGrupoOpts(c.value,grupoId);
+  };
+
+  var tbodyRows=mats.length===0
+    ?'<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">Sin alumnos en este grupo</td></tr>'
+    :mats.map(function(m){
+      return '<tr id="ag-row-'+m.folio+'" style="border-bottom:1px solid var(--border2)">'
+        +'<td style="padding:6px 10px"><input type="checkbox" id="agchk-f'+m.folio+'" onchange="_agToggle('+m.folio+')" style="width:16px;height:16px;cursor:pointer"></td>'
+        +'<td style="padding:6px 8px;font-size:12px;color:var(--text2)">#'+esc(String(m.folio))+'</td>'
+        +'<td style="padding:6px 8px;font-size:13px;font-weight:600">'+esc(m.alumno)+'</td>'
+        +'<td style="padding:6px 8px;font-size:11px;color:var(--text3)">'+esc(m.curso)+(m.grupoNombre?' / '+esc(m.grupoNombre):'')+'</td>'
+        +'<td style="padding:6px 8px;white-space:nowrap">'
+          +'<button class="btn-ghost btn-sm" title="Mover" style="font-size:11px;margin-right:4px" onclick="moverAlumnoModal('+m.folio+')"><i class="ti ti-arrows-transfer-down"></i></button>'
+          +'<button class="btn-danger btn-sm" title="Quitar del grupo" style="font-size:11px" onclick="quitarAlumnoGrupoById('+m.folio+')"><i class="ti ti-user-minus"></i></button>'
+        +'</td>'
+      +'</tr>';
+    }).join('');
+
+  var folioPIDs=JSON.stringify(mats.map(function(m){return String(m.folio);}));
+  var cursoOpts=todosLosCursos.map(function(c2){return '<option value="'+esc(c2.nombre)+'">'+esc(c2.nombre)+'</option>';}).join('');
+
+  var html2=''
+    +'<div style="font-size:11px;color:var(--text3);margin-bottom:12px">'+esc(cursoNombre)+' — '+esc(grupoLabel)+' — '+mats.length+' alumno'+(mats.length!==1?'s':'')+'</div>'
+    +'<div id="ag-bulk-bar" style="display:none;align-items:center;gap:8px;background:var(--accent-light);border:1px solid var(--accent);border-radius:8px;padding:8px 12px;margin-bottom:10px;flex-wrap:wrap">'
+      +'<span id="ag-selcount" style="font-size:12px;font-weight:600;color:var(--accent)">0 seleccionados</span>'
+      +'<span style="color:var(--text3);font-size:11px">|</span>'
+      +'<select id="ag-bulk-curso" onchange="_agCursoBulkChange()" style="font-size:11px;padding:3px 6px;border-radius:5px;background:var(--surface);color:var(--text);border:1px solid var(--border)">'
+        +'<option value="">-- Mover a curso --</option>'+cursoOpts
+      +'</select>'
+      +'<select id="ag-bulk-grupo" style="font-size:11px;padding:3px 6px;border-radius:5px;background:var(--surface);color:var(--text);border:1px solid var(--border)">'
+        +'<option value="">-- Grupo --</option>'
+      +'</select>'
+      +'<button class="btn-primary btn-sm" style="font-size:11px" onclick="moverSeleccionadosGrupo()"><i class="ti ti-arrows-transfer-down"></i> Mover</button>'
+      +'<button class="btn-danger btn-sm" style="font-size:11px" onclick="quitarSeleccionadosGrupo()"><i class="ti ti-user-minus"></i> Quitar del grupo</button>'
+    +'</div>'
+    +'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
+      +'<thead><tr style="border-bottom:2px solid var(--border);font-size:11px;color:var(--text2)">'
+        +'<th style="padding:6px 10px;width:36px"><input type="checkbox" id="agchk-all" onchange="_agToggleAll()" style="width:16px;height:16px;cursor:pointer"></th>'
+        +'<th style="padding:6px 8px;text-align:left">Folio</th>'
+        +'<th style="padding:6px 8px;text-align:left">Alumno</th>'
+        +'<th style="padding:6px 8px;text-align:left">Curso / Grupo</th>'
+        +'<th style="padding:6px 8px;text-align:left">Acciones</th>'
+      +'</tr></thead>'
+      +'<tbody>'+tbodyRows+'</tbody>'
+    +'</table></div>';
+
+  showModal('Alumnos del grupo: '+grupoLabel, html2, []);
+}
+
+function moverAlumnoModal(folio){
+  var cursoNombre=window._agCursoNombre;
+  var grupoId=window._agGrupoId;
+  var cursos=(STATE.cursos||[]);
+  var cursoOpts=cursos.map(function(c){return '<option value="'+esc(c.nombre)+'"'+(c.nombre===cursoNombre?' selected':'')+'>'+esc(c.nombre)+'</option>';}).join('');
+  window._mvCursoChange=function(){
+    var c=document.getElementById('mv-curso');
+    var go=document.getElementById('mv-grupo');
+    if(c&&go&&window._agBuildGrupoOpts) go.innerHTML=window._agBuildGrupoOpts(c.value,null);
+  };
+  var html2='<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Mover folio #'+folio+'</div>'
+    +'<div style="display:flex;flex-direction:column;gap:10px">'
+    +'<div><label style="font-size:11px;color:var(--text2)">Curso destino</label>'
+    +'<select id="mv-curso" onchange="_mvCursoChange()" '
+      +'style="width:100%;margin-top:4px;padding:8px;border-radius:6px;background:var(--surface);color:var(--text);border:1px solid var(--border)">'
+      +'<option value="">-- Seleccionar curso --</option>'+cursoOpts
+    +'</select></div>'
+    +'<div><label style="font-size:11px;color:var(--text2)">Grupo destino</label>'
+    +'<select id="mv-grupo" style="width:100%;margin-top:4px;padding:8px;border-radius:6px;background:var(--surface);color:var(--text);border:1px solid var(--border)">'
+      +'<option value="">Sin grupo (curso directo)</option>'
+      +(window._agBuildGrupoOpts?window._agBuildGrupoOpts(cursoNombre,null):'')
+    +'</select></div></div>';
+  showModal('Mover alumno',html2,[
+    {l:'Cancelar',cls:'btn-ghost',fn:'closeModal()'},
+    {l:'Mover',cls:'btn-primary',fn:'confirmarMoverAlumno('+folio+')'}
+  ]);
+}
+
+async function confirmarMoverAlumno(folio){
+  var cursoDest=(document.getElementById('mv-curso')||{}).value||(window._agCursoNombre||'');
+  var grupoDest=(document.getElementById('mv-grupo')||{}).value||'';
+  var mat=(STATE.matrículas||[]).find(function(m){return String(m.folio)===String(folio);});
+  if(!mat){alert('Matrícula no encontrada');return;}
+  var cObj=(STATE.cursos||[]).find(function(c){return c.nombre===cursoDest;});
+  var gObj=cObj&&grupoDest?(cObj.grupos||[]).find(function(g){return g.id===grupoDest;}):null;
+  mat.curso=cursoDest;mat.grupoId=grupoDest||null;mat.grupoNombre=gObj?gObj.nombre:null;
+  await saveState();closeModal();renderCursos();
+}
+
+async function quitarAlumnoGrupoById(folio){
+  var mat=(STATE.matrículas||[]).find(function(m){return String(m.folio)===String(folio);});
+  if(!mat){alert('Matrícula no encontrada');return;}
+  if(!confirm('Quitar folio #'+folio+' ('+mat.alumno+') del grupo? La matrícula quedará en el curso sin grupo.')) return;
+  mat.grupoId=null;mat.grupoNombre=null;
+  await saveState();closeModal();renderCursos();
+}
+
+async function moverSeleccionadosGrupo(){
+  var folios=Array.from(window._agSel||[]);
+  if(!folios.length){alert('Selecciona al menos un alumno');return;}
+  var cursoDest=(document.getElementById('ag-bulk-curso')||{}).value;
+  var grupoDest=(document.getElementById('ag-bulk-grupo')||{}).value||'';
+  if(!cursoDest){alert('Elige el curso destino');return;}
+  var cObj=(STATE.cursos||[]).find(function(c){return c.nombre===cursoDest;});
+  var gObj=cObj&&grupoDest?(cObj.grupos||[]).find(function(g){return g.id===grupoDest;}):null;
+  folios.forEach(function(f){
+    var m=(STATE.matrículas||[]).find(function(x){return String(x.folio)===String(f);});
+    if(m){m.curso=cursoDest;m.grupoId=grupoDest||null;m.grupoNombre=gObj?gObj.nombre:null;}
+  });
+  await saveState();closeModal();renderCursos();
+}
+
+async function quitarSeleccionadosGrupo(){
+  var folios=Array.from(window._agSel||[]);
+  if(!folios.length){alert('Selecciona al menos un alumno');return;}
+  if(!confirm('Quitar '+folios.length+' alumno'+(folios.length!==1?'s':'')+' del grupo?')) return;
+  folios.forEach(function(f){
+    var m=(STATE.matrículas||[]).find(function(x){return String(x.folio)===String(f);});
+    if(m){m.grupoId=null;m.grupoNombre=null;}
+  });
+  await saveState();closeModal();renderCursos();
+}
+
+
+async function quitarSeleccionadosGrupo(cursoActual, grupoActual){
+  var folios=Array.from(window._agSel||[]);
+  if(!folios.length){alert('Selecciona al menos un alumno');return;}
+  if(!confirm('¿Quitar '+folios.length+' alumno'+(folios.length!==1?'s':'')+' del grupo? Quedarán en el curso sin grupo.')){return;}
+  folios.forEach(function(f){
+    var mat=(STATE.matrículas||[]).find(function(m){return String(m.folio)===String(f);});
+    if(mat){mat.grupoId=null;mat.grupoNombre=null;}
+  });
+  await saveState();
+  closeModal();
+  renderCursos();
+}
+
 function renderCursos(){
   if(!hasPerm('ver_cursos')){
     document.getElementById('main-content').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><h3>Sin acceso</h3></div>';
@@ -4192,17 +4383,28 @@ function renderCursos(){
         }
         if(g.costoBase) tags+='<span style="background:var(--green-bg);color:var(--green);padding:2px 7px;border-radius:4px">💰 $'+g.costoBase+'</span> ';
 
-        // Student list for this group
+        // Student list for this group — abre modal completo con edición y selección masiva
         var alumnosList = '';
         if(gInscritos > 0){
-          var mostrar = grupoMats.slice(0,6);
+          var mostrar = grupoMats.slice(0,5);
           alumnosList = '<div style="margin-top:10px;border-top:1px solid var(--border2);padding-top:9px">'
-            +'<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:5px">Alumnos inscritos ('+gInscritos+'):</div>'
+            +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">'
+              +'<div style="font-size:11px;font-weight:600;color:var(--text2)">Alumnos inscritos ('+gInscritos+'):</div>'
+              +(canEdit?'<button class="btn-ghost btn-sm" style="font-size:11px" '
+                +'onclick="event.stopPropagation();showModalAlumnosGrupo(\''+esc(c.nombre)+'\',\''+esc(g.id)+'\')">'
+                +'<i class="ti ti-list-details"></i> Ver todos y editar</button>':'')
+            +'</div>'
             +'<div style="display:flex;flex-wrap:wrap;gap:5px">'
             +mostrar.map(function(m){
-              return '<span style="background:var(--accent-light);color:var(--accent);border-radius:12px;padding:2px 9px;font-size:11px">'+m.alumno+'</span>';
+              return '<span style="background:var(--accent-light);color:var(--accent);border-radius:12px;padding:2px 9px;font-size:11px;cursor:pointer" '
+                +(canEdit?'onclick="event.stopPropagation();showModalAlumnosGrupo(\''+esc(c.nombre)+'\',\''+esc(g.id)+'\')">':'>')
+                +esc(m.alumno)+'</span>';
             }).join('')
-            +(grupoMats.length>6?'<span style="color:var(--text3);font-size:11px;align-self:center">+ '+(grupoMats.length-6)+' más</span>':'')
+            +(grupoMats.length>5
+              ?'<span style="color:var(--accent);font-size:11px;align-self:center;cursor:pointer;font-weight:600" '
+                +(canEdit?'onclick="event.stopPropagation();showModalAlumnosGrupo(\''+esc(c.nombre)+'\',\''+esc(g.id)+'\')"':'')
+                +'>+ '+(grupoMats.length-5)+' más →</span>'
+              :'')
             +'</div></div>';
         } else {
           alumnosList = '<div style="margin-top:8px;font-size:11px;color:var(--text3)">Sin alumnos asignados a este grupo</div>';
