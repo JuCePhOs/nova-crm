@@ -1266,7 +1266,15 @@ function navigate(tab){
   document.querySelectorAll('.sn-item').forEach(el=>el.classList.toggle('active',el.id===`sn-${tab}`));
   if(VIEWS[tab])VIEWS[tab]();
 }
-function refreshCurrentView(){if(currentUser&&VIEWS[currentTab])VIEWS[currentTab]();}
+function updatePendingBadge(){
+  var pending=pendingPayments();
+  var el=document.querySelector('#sn-pagos .sn-badge');
+  if(el){el.textContent=pending||'';el.style.display=pending?'':'none';}
+}
+function refreshCurrentView(){
+  if(currentUser&&VIEWS[currentTab])VIEWS[currentTab]();
+  updatePendingBadge();
+}
 
 
 
