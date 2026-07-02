@@ -3479,10 +3479,42 @@ function _fechaDisplay(p){
   const[y,m,d]=iso.split('-');
   return d&&m&&y?`${d}/${m}/${y}`:iso;
 }
+var _historialSort={col:'fecha',dir:'desc'};
+function sortHistorial(col){
+  if(_historialSort.col===col){
+    _historialSort.dir=_historialSort.dir==='asc'?'desc':'asc';
+  } else {
+    _historialSort.col=col;
+    _historialSort.dir=(col==='monto'||col==='neto'||col==='fecha')?'desc':'asc';
+  }
+  var pc=document.getElementById('pago-content');
+  if(pc) pc.innerHTML=buildHistorialPagos();
+}
 function buildHistorialPagos(){
   const cm=monthStr();
   const _folioNvosH=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>m.folio));
-  const todosSinFiltro=[...(STATE.pagosRegulares||[])].sort((a,b)=>_fechaSortKey(b).localeCompare(_fechaSortKey(a)));
+  var _hs=_historialSort||{col:'fecha',dir:'desc'};
+  var _sortFn=function(a,b){
+    var col=_hs.col; var dir=_hs.dir; var va,vb;
+    if(col==='fecha'){va=_fechaSortKey(a);vb=_fechaSortKey(b);}
+    else if(col==='alumno'){va=(a.alumnoNombre||'').toLowerCase();vb=(b.alumnoNombre||'').toLowerCase();}
+    else if(col==='curso'){va=(a.curso||'').toLowerCase();vb=(b.curso||'').toLowerCase();}
+    else if(col==='mes'){va=(a.meses||[])[0]||'';vb=(b.meses||[])[0]||'';}
+    else if(col==='method'){va=a.method||'';vb=b.method||'';}
+    else if(col==='monto'){va=a.montoFinal||0;vb=b.montoFinal||0;}
+    else if(col==='neto'){va=a.neto||0;vb=b.neto||0;}
+    else{va=_fechaSortKey(a);vb=_fechaSortKey(b);}
+    if(typeof va==='number') return dir==='asc'?va-vb:vb-va;
+    return dir==='asc'?va.localeCompare(vb,undefined,{sensitivity:'base'}):vb.localeCompare(va,undefined,{sensitivity:'base'});
+  };
+  var _sortIco=function(col){
+    if(_hs.col!==col) return '<i class="ti ti-selector" style="font-size:10px;opacity:0.35;margin-left:3px;vertical-align:middle"></i>';
+    return _hs.dir==='asc'
+      ?'<i class="ti ti-chevron-up" style="font-size:10px;color:var(--accent);margin-left:3px;vertical-align:middle"></i>'
+      :'<i class="ti ti-chevron-down" style="font-size:10px;color:var(--accent);margin-left:3px;vertical-align:middle"></i>';
+  };
+  var _thSort=function(col,label){return '<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="sortHistorial(\''+col+'\')">'+label+_sortIco(col)+'</th>';};
+  const todosSinFiltro=[...(STATE.pagosRegulares||[])].sort(_sortFn);
   if(todosSinFiltro.length===0)return`<div class="empty"><div class="empty-icon">📄</div><h3>${t('pag_hist_sin')}</h3><p>${t('pag_hist_sin_sub')}</p></div>`;
   const q=(_historialQ||'').toLowerCase();
   const todos=q?todosSinFiltro.filter(p=>{
@@ -3510,7 +3542,7 @@ function buildHistorialPagos(){
   </div>
   <div id="hist-wrap" class="table-wrap fade-in">
     <table>
-      <thead><tr><th>Fecha</th><th>Alumno</th><th>Curso</th><th>Meses cubiertos</th><th>Método</th><th>Monto</th><th>Neto</th><th>Promo</th><th style="min-width:80px"></th></tr></thead>
+      <thead><tr>${_thSort('fecha','Fecha')}${_thSort('alumno','Alumno')}${_thSort('curso','Curso')}${_thSort('mes','Meses cubiertos')}${_thSort('method','Método')}${_thSort('monto','Monto')}${_thSort('neto','Neto')}<th>Promo</th><th style="min-width:80px"></th></tr></thead>
       <tbody>
       ${todos.length===0?`<tr><td colspan="9" style="text-align:center;padding:24px;color:var(--text3)">Sin resultados para "${esc(q)}"</td></tr>`
         :todos.map(p=>`<tr>
