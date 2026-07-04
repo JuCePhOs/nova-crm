@@ -3155,20 +3155,13 @@ function buildRegistrarPago(){
     <div class="form-grid">
       <div class="form-group span2">
         <label class="flbl">${t('pag_campo_alumno')}</label>
-        <div style="position:relative">
-          <input id="rp-alumno-search" type="text" placeholder="🔍 Buscar alumno..." autocomplete="off"
-            style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px 8px 0 0;background:var(--surface);color:var(--text);font-size:14px;box-sizing:border-box"
-            oninput="filtrarAlumnosSelect(this.value)"
-            onfocus="document.getElementById('rp-alumno-wrap').style.display='block'"
-            onblur="setTimeout(()=>{document.getElementById('rp-alumno-wrap').style.display='none'},200)">
-          <div id="rp-alumno-wrap" style="display:none;position:absolute;width:100%;max-height:220px;overflow-y:auto;background:var(--surface);border:1px solid var(--accent);border-top:none;border-radius:0 0 8px 8px;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,.3)">
-            <select id="rp-alumno" size="10" style="width:100%;border:none;background:transparent;color:var(--text);font-size:13px;padding:4px 0;outline:none"
-              onchange="(function(){var s=document.getElementById('rp-alumno');var sr=document.getElementById('rp-alumno-search');if(s&&sr){sr.value=s.options[s.selectedIndex]?.text||'';onAlumnoChange();document.getElementById('rp-alumno-wrap').style.display='none';}})()">
-              <option value="">${t('pag_sel_alumno')}</option>
-              ${alumnoOpts}
-            </select>
-          </div>
-        </div>
+        <input id="rp-alumno-search" type="text" placeholder="🔍 Buscar alumno o folio..." autocomplete="off"
+            style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;box-sizing:border-box;margin-bottom:6px"
+            oninput="filtrarAlumnosSelect(this.value)">
+        <select id="rp-alumno" onchange="onAlumnoChange()" style="width:100%">
+          <option value="">${t('pag_sel_alumno')}</option>
+          ${alumnoOpts}
+        </select>
       </div>
       <div class="form-group span2" id="rp-alumno-info" style="display:none">
         <div class="info-box" id="rp-info-box"></div>
@@ -3177,7 +3170,7 @@ function buildRegistrarPago(){
         <label class="flbl">${t('pag_campo_meses')}</label>
         <p style="font-size:12px;color:var(--text3);margin-bottom:8px">${t('pag_meses_hint')}</p>
         <div class="month-grid" id="rp-months">
-          ${meses.map(({ym,label})=>`
+          ${meses.map(({ym,label,esPasado})=>`
           <div class="month-chip${esPasado?' month-chip-past':''}" data-ym="${ym}" onclick="toggleMes(this)" title="${ym}">${esPasado?'↩ ':' '}${label}</div>`).join('')}
         </div>
         <div id="rp-selected-months" style="font-size:12px;color:var(--text2);margin-top:6px"></div>
@@ -3893,10 +3886,9 @@ function precargarPago(folio, mesPresel){
   pagoSubTab='registrar';renderPagoTab();
   setTimeout(()=>{
     const el=document.getElementById('rp-alumno');
-    const sr=document.getElementById('rp-alumno-search');
-    if(el){el.value=folio;onAlumnoChange();
-      if(sr){const opt=el.querySelector('option[value="'+folio+'"]');if(opt)sr.value=opt.text;}
-    }
+    if(el){el.value=folio;onAlumnoChange();}
+    var sr=document.getElementById('rp-alumno-search');
+    if(sr){var op=document.querySelector('#rp-alumno option[value="'+folio+'"]');sr.value=op?op.text:'';}
     // Pre-seleccionar mes si se indicó (ej: mes anterior para pendientes)
     if(mesPresel){
       setTimeout(()=>{
