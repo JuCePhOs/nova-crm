@@ -3137,15 +3137,16 @@ async function guardarPagoMasivo(){
 function buildRegistrarPago(){
   const cm=monthStr();
   const promos=getPromosVigentes(cm);
-  const alumnoOpts=STATE.matrículas.map(m=>`<option value="${m.folio}">${m.alumno} — ${m.curso}</option>`).join('');
+  const alumnoOpts=[...(STATE.matrículas||[])].sort((a,b)=>a.alumno.localeCompare(b.alumno,'es',{sensitivity:'base'})).map(m=>`<option value="${m.folio}">${m.alumno} — ${m.curso} (#${m.folio})</option>`).join('');
 
   // Generate next 12 months starting from current
   const meses=[];
   const covered=new Set(STATE.pagosRegulares.flatMap(p=>p.meses||[]));
-  for(let i=0;i<12;i++){
+  // Incluir 2 meses anteriores (para registrar pagos pendientes de meses pasados)
+  for(let i=-2;i<12;i++){
     const d=new Date();d.setDate(1);d.setMonth(d.getMonth()+i);
     const ym=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-    meses.push({ym,label:mesLabel(ym)});
+    meses.push({ym,label:mesLabel(ym),esPasado:i<0});
   }
 
   return `
@@ -3154,10 +3155,20 @@ function buildRegistrarPago(){
     <div class="form-grid">
       <div class="form-group span2">
         <label class="flbl">${t('pag_campo_alumno')}</label>
-        <select id="rp-alumno" onchange="onAlumnoChange()">
-          <option value="">${t('pag_sel_alumno')}</option>
-          ${alumnoOpts}
-        </select>
+        <div style="position:relative">
+          <input id="rp-alumno-search" type="text" placeholder="🔍 Buscar alumno..." autocomplete="off"
+            style="width:100%;padding:9px 12px;border:1px solid var(--border);border-radius:8px 8px 0 0;background:var(--surface);color:var(--text);font-size:14px;box-sizing:border-box"
+            oninput="filtrarAlumnosSelect(this.value)"
+            onfocus="document.getElementById('rp-alumno-wrap').style.display='block'"
+            onblur="setTimeout(()=>{document.getElementById('rp-alumno-wrap').style.display='none'},200)">
+          <div id="rp-alumno-wrap" style="display:none;position:absolute;width:100%;max-height:220px;overflow-y:auto;background:var(--surface);border:1px solid var(--accent);border-top:none;border-radius:0 0 8px 8px;z-index:999;box-shadow:0 8px 24px rgba(0,0,0,.3)">
+            <select id="rp-alumno" size="10" style="width:100%;border:none;background:transparent;color:var(--text);font-size:13px;padding:4px 0;outline:none"
+              onchange="(function(){var s=document.getElementById('rp-alumno');var sr=document.getElementById('rp-alumno-search');if(s&&sr){sr.value=s.options[s.selectedIndex]?.text||'';onAlumnoChange();document.getElementById('rp-alumno-wrap').style.display='none';}})()">
+              <option value="">${t('pag_sel_alumno')}</option>
+              ${alumnoOpts}
+            </select>
+          </div>
+        </div>
       </div>
       <div class="form-group span2" id="rp-alumno-info" style="display:none">
         <div class="info-box" id="rp-info-box"></div>
@@ -3167,7 +3178,7 @@ function buildRegistrarPago(){
         <p style="font-size:12px;color:var(--text3);margin-bottom:8px">${t('pag_meses_hint')}</p>
         <div class="month-grid" id="rp-months">
           ${meses.map(({ym,label})=>`
-          <div class="month-chip" data-ym="${ym}" onclick="toggleMes(this)" title="${ym}">${label}</div>`).join('')}
+          <div class="month-chip${esPasado?' month-chip-past':''}" data-ym="${ym}" onclick="toggleMes(this)" title="${ym}">${esPasado?'↩ ':' '}${label}</div>`).join('')}
         </div>
         <div id="rp-selected-months" style="font-size:12px;color:var(--text2);margin-top:6px"></div>
       </div>
@@ -3836,26 +3847,30 @@ function buildPendientes(){
   const folioNuevos=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>String(m.folio)));
   const pendAnt=pendientes.filter(m=>!folioNuevos.has(String(m.folio)));
   const pendNvo=pendientes.filter(m=>folioNuevos.has(String(m.folio)));
-  const filasPend=group=>`${group.map(m=>`<tr>
+  const cmPrev=(function(){var d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');})();
+  const filasPend=(group,esPasado)=>`${group.map(m=>`<tr>
       <td style="font-weight:600">${esc(m.alumno)}</td>
       <td><span class="folio-tag">#${m.folio}</span></td>
       <td><span class="badge badge-admin">${esc(m.curso)}</span></td>
       <td style="font-size:12px;color:var(--text2)">${m.email||'—'}</td>
-      <td><button class="btn-green btn-sm" onclick="precargarPago(${m.folio})"><i class="ti ti-cash"></i> ${t('pag_reg_pago')}</button></td>
+      <td>${esPasado
+        ?`<button class="btn-orange btn-sm" onclick="precargarPago(${m.folio},'${cmPrev}')" title="Registrar pago de ${mesLabel(cmPrev)}"><i class="ti ti-clock"></i> Pagar ${mesLabel(cmPrev)}</button>`
+        :`<button class="btn-green btn-sm" onclick="precargarPago(${m.folio})"><i class="ti ti-cash"></i> ${t('pag_reg_pago')}</button>`}
+      </td>
     </tr>`).join('')}`;
   const tablaBase=`<div class="table-wrap fade-in"><table>
     <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
-    <tbody>${filasPend(pendientes)}</tbody></table></div>`;
+    <tbody>${filasPend(pendientes,pendAnt.length===pendientes.length)}</tbody></table></div>`;
   if(pendAnt.length>0&&pendNvo.length>0){
     return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong> — ${pendientes.length} total:</div>
     <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Alumnos anteriores (${pendAnt.length})</div>
     <div class="table-wrap fade-in"><table>
       <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
-      <tbody>${filasPend(pendAnt)}</tbody></table></div>
+      <tbody>${filasPend(pendAnt,true)}</tbody></table></div>
     <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">🆕 Nuevos inscritos este mes (${pendNvo.length})</div>
     <div class="table-wrap fade-in"><table>
       <thead><tr><th>Alumno</th><th>Folio</th><th>Curso</th><th>Email</th><th>Acción</th></tr></thead>
-      <tbody>${filasPend(pendNvo)}</tbody></table></div>`;
+      <tbody>${filasPend(pendNvo,false)}</tbody></table></div>`;
   }
   const label=pendNvo.length===pendientes.length
     ?`${t('pag_pend_texto')} <strong>${mesLabel(cm)}</strong> — 🆕 todos son nuevos inscritos este mes:`
@@ -3863,11 +3878,32 @@ function buildPendientes(){
   return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${label}</div>${tablaBase}`;
 }
 
-function precargarPago(folio){
+function filtrarAlumnosSelect(q){
+  var sel=document.getElementById('rp-alumno');
+  var wrap=document.getElementById('rp-alumno-wrap');
+  if(!sel) return;
+  if(q.length>0) wrap.style.display='block';
+  var txt=q.trim().toLowerCase();
+  Array.from(sel.options).forEach(function(o){
+    if(!o.value){o.style.display='';return;}
+    o.style.display=(o.text.toLowerCase().includes(txt)||!txt)?'':'none';
+  });
+}
+function precargarPago(folio, mesPresel){
   pagoSubTab='registrar';renderPagoTab();
   setTimeout(()=>{
     const el=document.getElementById('rp-alumno');
-    if(el){el.value=folio;onAlumnoChange();}
+    const sr=document.getElementById('rp-alumno-search');
+    if(el){el.value=folio;onAlumnoChange();
+      if(sr){const opt=el.querySelector('option[value="'+folio+'"]');if(opt)sr.value=opt.text;}
+    }
+    // Pre-seleccionar mes si se indicó (ej: mes anterior para pendientes)
+    if(mesPresel){
+      setTimeout(()=>{
+        var chip=document.querySelector('.month-chip[data-ym="'+mesPresel+'"]');
+        if(chip&&!chip.classList.contains('selected')) chip.click();
+      },200);
+    }
   },100);
 }
 
