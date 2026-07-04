@@ -3137,6 +3137,7 @@ async function guardarPagoMasivo(){
 function buildRegistrarPago(){
   const cm=monthStr();
   const promos=getPromosVigentes(cm);
+  _rpAlumnoAllOpts=null;
   const alumnoOpts=[...(STATE.matrículas||[])].sort((a,b)=>a.alumno.localeCompare(b.alumno,'es',{sensitivity:'base'})).map(m=>`<option value="${m.folio}">${m.alumno} — ${m.curso} (#${m.folio})</option>`).join('');
 
   // Generate next 12 months starting from current
@@ -3243,6 +3244,7 @@ function buildRegistrarPago(){
         <div class="method-toggle" id="rp-method-btns">
           <div class="method-btn" data-m="cash" onclick="selectMethod(this)">${t('pag_method_cash')}</div>
           <div class="method-btn" data-m="transfer" onclick="selectMethod(this)">${t('pag_method_transfer')}</div>
+          <div class="method-btn" data-m="mixto" onclick="selectMethod(this)">&#9889; Pago mixto</div>
           <div class="method-btn" data-m="card" onclick="selectMethod(this)">${t('pag_method_card')}</div>
         </div>
       </div>
@@ -3311,6 +3313,8 @@ function selectMethod(btn){
   const m=btn.dataset.m;
   selectedMethod=m;
   btn.className='method-btn sel-'+m;
+  var mp=document.getElementById('rp-mixto-panel');
+  if(mp) mp.style.display=(m==='mixto')?'block':'none';
   const mpInfo=document.getElementById('rp-mp-info');
   if(mpInfo)mpInfo.style.display=m==='card'?'block':'none';
   calcPagoBreakdown();
@@ -3430,6 +3434,15 @@ async function guardarPago(){
   if(selectedMeses.length===0){alert(t('pag_sel_mes_alert'));return;}
   if(base<=0){alert(t('pag_monto_alert'));return;}
   if(!selectedMethod){alert(t('pag_method_alert'));return;}
+  var m1='cash',m1Monto=0,m2='transfer',m2Monto=0;
+  if(selectedMethod==='mixto'){
+    m1=(document.getElementById('rp-m1')||{}).value||'cash';
+    m1Monto=parseFloat((document.getElementById('rp-m1-monto')||{}).value)||0;
+    m2=(document.getElementById('rp-m2')||{}).value||'transfer';
+    m2Monto=parseFloat((document.getElementById('rp-m2-monto')||{}).value)||0;
+    if(m1===m2){alert('Los 2 métodos deben ser diferentes.');return;}
+    if(m1Monto<=0||m2Monto<=0){alert('Ambos montos deben ser mayores a cero.');return;}
+  }
   const m=STATE.matrículas.find(x=>x.folio===folio);
   const subtotal=+(base*selectedMeses.length).toFixed(2);
   let descuentoMonto=0,promoNombre='';
@@ -3457,12 +3470,13 @@ async function guardarPago(){
   const montoFinal=+(subtotal-descuentoMonto-descuentoMonto2).toFixed(2);
   let commMP=0,ivaMP=0,neto=montoFinal;
   if(selectedMethod==='card'){commMP=+(montoFinal*0.035).toFixed(2);ivaMP=+(commMP*0.16).toFixed(2);neto=+(montoFinal-commMP-ivaMP).toFixed(2);}
+  else if(selectedMethod==='mixto'){var cp=(m1==='card'?m1Monto:0)+(m2==='card'?m2Monto:0);if(cp>0){commMP=+(cp*0.035).toFixed(2);ivaMP=+(commMP*0.16).toFixed(2);neto=+(montoFinal-commMP-ivaMP).toFixed(2);}}
   const pago={
     id:uid(),alumnoNombre:m.alumno,crmFolio:folio,curso:m.curso,stackAutorizadoPor:promoId2?currentUser.username:null,
     meses:[...selectedMeses],mesesCount:selectedMeses.length,
     montoBase:base,subtotal,promoId:promoId||null,promoNombre:promoNombre||null,
     descuentoMonto,promoId2:promoId2||null,promoNombre2:promoNombre2||null,descuentoMonto2,montoFinal,commMP,ivaMP,neto,
-    method:selectedMethod,fecha,notas,
+    method:selectedMethod==='mixto'?('mixto:'+m1+'+'+m2):selectedMethod,fecha,notas:selectedMethod==='mixto'?('Mixto: $'+m1Monto+' '+m1+' + $'+m2Monto+' '+m2+(notas?' | '+notas:'')):notas,
     createdAt:new Date().toISOString(),createdBy:currentUser.username,
   };
   STATE.pagosRegulares.push(pago);
@@ -3871,16 +3885,28 @@ function buildPendientes(){
   return`<div style="font-size:13px;color:var(--text2);margin-bottom:12px">${label}</div>${tablaBase}`;
 }
 
+var _rpAlumnoAllOpts=null;
 function filtrarAlumnosSelect(q){
   var sel=document.getElementById('rp-alumno');
-  var wrap=document.getElementById('rp-alumno-wrap');
   if(!sel) return;
-  if(q.length>0) wrap.style.display='block';
+  if(!_rpAlumnoAllOpts){
+    _rpAlumnoAllOpts=Array.from(sel.options).map(function(o){return{value:o.value,text:o.text};});
+  }
   var txt=q.trim().toLowerCase();
-  Array.from(sel.options).forEach(function(o){
-    if(!o.value){o.style.display='';return;}
-    o.style.display=(o.text.toLowerCase().includes(txt)||!txt)?'':'none';
+  var currentVal=sel.value;
+  sel.innerHTML='';
+  _rpAlumnoAllOpts.forEach(function(o){
+    if(!o.value||(txt&&!o.text.toLowerCase().includes(txt))) return;
+    var opt=document.createElement('option');
+    opt.value=o.value;opt.text=o.text;
+    if(o.value===currentVal) opt.selected=true;
+    sel.appendChild(opt);
   });
+  if(!sel.options.length||sel.options[0].value){
+    var ph=document.createElement('option');
+    ph.value='';ph.text=txt?'('+sel.options.length+' resultados)':'— Seleccionar alumno —';
+    sel.insertBefore(ph,sel.options[0]||null);
+  }
 }
 function precargarPago(folio, mesPresel){
   pagoSubTab='registrar';renderPagoTab();
