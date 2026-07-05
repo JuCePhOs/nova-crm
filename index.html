@@ -2153,9 +2153,36 @@ function showModalNuevaMatricula(){
           <div id="f-metodo-cont" style="display:none">
             <label class="flbl" style="margin-bottom:6px;display:block">Método de pago</label>
             <div style="display:flex;flex-direction:column;gap:8px">
-              <label style="${RS}"><div>💵 Efectivo</div><input type="radio" name="f-metodo-pago" value="cash" style="width:16px;height:16px;flex-shrink:0"></label>
-              <label style="${RS}"><div>💳 Tarjeta</div><input type="radio" name="f-metodo-pago" value="card" style="width:16px;height:16px;flex-shrink:0"></label>
-              <label style="${RS}"><div>🏦 Transferencia</div><input type="radio" name="f-metodo-pago" value="transfer" style="width:16px;height:16px;flex-shrink:0"></label>
+              <label style="${RS}"><div>💵 Efectivo</div><input type="radio" name="f-metodo-pago" value="cash" onchange="toggleMixtoMatricula()" style="width:16px;height:16px;flex-shrink:0"></label>
+              <label style="${RS}"><div>💳 Tarjeta</div><input type="radio" name="f-metodo-pago" value="card" onchange="toggleMixtoMatricula()" style="width:16px;height:16px;flex-shrink:0"></label>
+              <label style="${RS}"><div>🏦 Transferencia</div><input type="radio" name="f-metodo-pago" value="transfer" onchange="toggleMixtoMatricula()" style="width:16px;height:16px;flex-shrink:0"></label>
+              <label style="${RS}"><div>⚡ Pago mixto</div><input type="radio" name="f-metodo-pago" value="mixto" onchange="toggleMixtoMatricula()" style="width:16px;height:16px;flex-shrink:0"></label>
+            </div>
+            <div id="f-mixto-panel" style="display:none;margin-top:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px">
+              <div style="font-size:12px;font-weight:600;margin-bottom:10px;color:var(--text2)">⚡ Pago mixto — Especifica los 2 métodos</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div><label class="flbl" style="font-size:11px">Método 1</label>
+                  <select id="f-m1" style="width:100%">
+                    <option value="cash">💵 Efectivo</option>
+                    <option value="transfer">🏦 Transferencia</option>
+                    <option value="card">💳 Terminal MP</option>
+                  </select>
+                </div>
+                <div><label class="flbl" style="font-size:11px">Monto método 1 ($)</label>
+                  <input type="number" id="f-m1-monto" min="0" step="0.01" placeholder="0.00">
+                </div>
+                <div><label class="flbl" style="font-size:11px">Método 2</label>
+                  <select id="f-m2" style="width:100%">
+                    <option value="transfer">🏦 Transferencia</option>
+                    <option value="cash">💵 Efectivo</option>
+                    <option value="card">💳 Terminal MP</option>
+                  </select>
+                </div>
+                <div><label class="flbl" style="font-size:11px">Monto método 2 ($)</label>
+                  <input type="number" id="f-m2-monto" min="0" step="0.01" placeholder="0.00">
+                </div>
+              </div>
+              <div id="f-mixto-aviso" style="font-size:11px;color:var(--danger);margin-top:8px"></div>
             </div>
           </div>
         </div>
@@ -2351,12 +2378,30 @@ async function guardarMatricula(){
     var metEl=document.querySelector('input[name="f-metodo-pago"]:checked');
     var met=metEl?metEl.value:'cash';
     var comm2=0,iva2=0,neto2=primerPagoNum;
-    if(met==='card'){comm2=+(primerPagoNum*0.035).toFixed(2);iva2=+(comm2*0.16).toFixed(2);neto2=+(primerPagoNum-comm2-iva2).toFixed(2);}
+    var notasMet='Primer pago — Folio #'+folio;
+    var methodFinal=met;
+    if(met==='card'){
+      comm2=+(primerPagoNum*0.035).toFixed(2);iva2=+(comm2*0.16).toFixed(2);neto2=+(primerPagoNum-comm2-iva2).toFixed(2);
+    } else if(met==='mixto'){
+      var _m1=(document.getElementById('f-m1')||{}).value||'cash';
+      var _m1Monto=parseFloat((document.getElementById('f-m1-monto')||{}).value)||0;
+      var _m2=(document.getElementById('f-m2')||{}).value||'transfer';
+      var _m2Monto=parseFloat((document.getElementById('f-m2-monto')||{}).value)||0;
+      if(_m1===_m2){alert('Los 2 métodos deben ser diferentes.');return;}
+      if(_m1Monto<=0||_m2Monto<=0){alert('Ambos montos del pago mixto deben ser mayores a cero.');return;}
+      if(+(_m1Monto+_m2Monto).toFixed(2)!==+primerPagoNum.toFixed(2)){
+        if(!confirm('La suma de los 2 métodos ($'+(_m1Monto+_m2Monto).toLocaleString('es-MX')+') no coincide con el primer pago ($'+primerPagoNum.toLocaleString('es-MX')+').\n\n¿Registrar igual?')) return;
+      }
+      var _cardPart=(_m1==='card'?_m1Monto:0)+(_m2==='card'?_m2Monto:0);
+      if(_cardPart>0){comm2=+(_cardPart*0.035).toFixed(2);iva2=+(comm2*0.16).toFixed(2);neto2=+(primerPagoNum-comm2-iva2).toFixed(2);}
+      methodFinal='mixto:'+_m1+'+'+_m2;
+      notasMet='Primer pago — Folio #'+folio+' — Mixto: $'+_m1Monto.toLocaleString('es-MX')+' '+_m1+' + $'+_m2Monto.toLocaleString('es-MX')+' '+_m2;
+    }
     STATE.pagosRegulares.push({id:uid(),alumnoNombre:alumno,crmFolio:folio,curso,
       meses:[monthStr()],mesesCount:1,montoBase:primerPagoNum,subtotal:primerPagoNum,
       promoId:null,promoNombre:null,descuentoMonto:0,montoFinal:primerPagoNum,
-      commMP:comm2,ivaMP:iva2,neto:neto2,method:met,
-      fecha:fmtFecha(fechaISO),fechaISO,notas:'Primer pago — Folio #'+folio,
+      commMP:comm2,ivaMP:iva2,neto:neto2,method:methodFinal,
+      fecha:fmtFecha(fechaISO),fechaISO,notas:notasMet,
       createdAt:new Date().toISOString(),createdBy:currentUser.username});
   }
   await saveState();
@@ -7138,6 +7183,11 @@ function updateFirstPaymentStatus(){
       warn.innerHTML='⚠️ Precio por debajo del costo base ($'+minimoReq.toLocaleString('es-MX')+') — '+(puedeAutorizarPromos()?'el Semidios puede autorizarlo.':'se enviará a autorización del Modo Dios al guardar.');
     } else { warn.style.display='none'; }
   }
+}
+function toggleMixtoMatricula(){
+  var metEl=document.querySelector('input[name="f-metodo-pago"]:checked');
+  var panel=document.getElementById('f-mixto-panel');
+  if(panel) panel.style.display=(metEl&&metEl.value==='mixto')?'block':'none';
 }
 function togglePagoStatus(paid){
   var mc=document.getElementById('f-metodo-cont');
