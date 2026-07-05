@@ -2289,7 +2289,24 @@ function autoFillAlumno(){
   }
 }
 
-async function guardarMatricula(){
+var _guardandoMatricula=false;
+async function _conGuardBotonMat(fn){
+  if(_guardandoMatricula) return; // ya se está guardando — ignora el clic repetido
+  _guardandoMatricula=true;
+  var _btn=document.getElementById('btn-guardar-mat');
+  var _origHtml=_btn?_btn.innerHTML:null;
+  if(_btn){_btn.disabled=true;_btn.style.opacity='0.6';_btn.style.cursor='not-allowed';_btn.innerHTML='<i class="ti ti-loader-2"></i> Guardando…';}
+  try{
+    await fn();
+  } finally {
+    _guardandoMatricula=false;
+    if(_btn){_btn.disabled=false;_btn.style.opacity='';_btn.style.cursor='';if(_origHtml)_btn.innerHTML=_origHtml;}
+  }
+}
+async function guardarMatricula(){ await _conGuardBotonMat(_guardarMatriculaImpl); }
+async function guardarMatriculasMultiples(){ await _conGuardBotonMat(_guardarMatriculasMultiplesImpl); }
+
+async function _guardarMatriculaImpl(){
   const alumno=document.getElementById('f-alumno').value.trim();
   const nac=document.getElementById('f-nac').value;
   const curso=document.getElementById('f-curso').value;
@@ -2871,7 +2888,7 @@ function renderPagos(){
       <h2>Pagos Regulares</h2>
       <p>${t('pag_subtitulo')} — ${new Date().toLocaleDateString('es-MX',{month:'long',year:'numeric'})}</p>
     </div>
-    ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="diagnosticoPagos()" title="Audita todas las matrículas en busca de inconsistencias"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</button> <button class="btn-primary btn-sm" onclick="inspeccionarFolios()" title="Ver y eliminar pagos de folios específicos con problemas"><i class="ti ti-search"></i> Inspeccionar folios</button> <button class="btn-ghost btn-sm" onclick="repararPagosPaquete()" title="Crea pagos faltantes para folios de paquete (ej. 1186, 1187)"><i class="ti ti-tool"></i> Reparar paquetes</button>':''}
+    ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="diagnosticoPagos()" title="Audita todas las matrículas en busca de inconsistencias"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</button> <button class="btn-primary btn-sm" onclick="inspeccionarFolios()" title="Ver y eliminar pagos de folios específicos con problemas"><i class="ti ti-search"></i> Inspeccionar folios</button> <button class="btn-ghost btn-sm" onclick="repararPagosPaquete()" title="Crea pagos faltantes para folios de paquete (ej. 1186, 1187)"><i class="ti ti-tool"></i> Reparar paquetes</button> <button class="btn-danger btn-sm" onclick="limpiarPagosDuplicados()" title="Elimina pagos duplicados con el mismo folio, mes y monto (deja solo uno)"><i class="ti ti-copy-off"></i> Limpiar duplicados</button>':''}
   </div>
   <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
     <div class="stat-card" style="--stripe:var(--green)"><div class="stat-label">Contratos al corriente</div><div class="stat-val">${(STATE.matrículas||[]).length-pending}</div><div class="stat-sub">de ${(STATE.matrículas||[]).length} alumnos</div></div>
@@ -3898,6 +3915,36 @@ async function limpiarPagosHuerfanosCRM(){
   renderPagos();
   buildSidebar();
   setTimeout(()=>alert(`✅ Eliminados ${huerfanos.length} pago${huerfanos.length===1?'':'s'} huérfano${huerfanos.length===1?'':'s'}. Recarga Contabilidad para ver los cambios.`),200);
+}
+
+async function limpiarPagosDuplicados(){
+  if(!hasPerm('modo_dios')){alert('Solo el Modo Dios puede usar esta función.');return;}
+  // Detecta pagos con el mismo folio + mismos meses + mismo montoFinal (duplicados por doble clic/doble submit).
+  // Conserva el MÁS ANTIGUO (menor createdAt) de cada grupo y marca el resto para eliminar.
+  var grupos={};
+  (STATE.pagosRegulares||[]).forEach(function(p){
+    var key=String(p.crmFolio)+'|'+(p.meses||[]).join(',')+'|'+(p.montoFinal||0)+'|'+(p.method||'');
+    if(!grupos[key])grupos[key]=[];
+    grupos[key].push(p);
+  });
+  var aEliminar=[];
+  Object.values(grupos).forEach(function(arr){
+    if(arr.length<=1)return;
+    arr.sort(function(a,b){return (a.createdAt||'').localeCompare(b.createdAt||'');});
+    aEliminar=aEliminar.concat(arr.slice(1)); // conserva el primero (más antiguo), marca el resto
+  });
+  if(aEliminar.length===0){alert('✅ No hay pagos duplicados. Todo está en orden.');return;}
+  var detalles=aEliminar.map(function(p){
+    return 'Folio #'+p.crmFolio+' — '+(p.alumnoNombre||'(sin nombre)')+' — '+(p.meses||[]).join(', ')+' — '+fmtMXN(p.montoFinal||0);
+  }).join('\n');
+  if(!confirm('🗑️ Se encontraron '+aEliminar.length+' pago'+(aEliminar.length===1?'':'s')+' duplicado'+(aEliminar.length===1?'':'s')+' (mismo folio+mes+monto).\n\nSe conservará 1 registro por cada duplicado y se eliminará el resto:\n\n'+detalles+'\n\nEsta acción NO se puede deshacer. ¿Continuar?'))return;
+  var idsEliminar=new Set(aEliminar.map(function(p){return p.id;}));
+  STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(function(p){return !idsEliminar.has(p.id);});
+  await saveState();
+  closeModal();
+  renderPagos();
+  buildSidebar();
+  setTimeout(function(){alert('✅ Eliminados '+aEliminar.length+' pago'+(aEliminar.length===1?'':'s')+' duplicado'+(aEliminar.length===1?'':'s')+'.');},200);
 }
 
 async function eliminarPago(id){
@@ -7471,7 +7518,7 @@ function recalcMultiPago(cursoNombre){
   }
 }
 
-async function guardarMatriculasMultiples(){
+async function _guardarMatriculasMultiplesImpl(){
   var alumno  = (document.getElementById('f-alumno')||{}).value?.trim();
   var nac     = document.getElementById('f-nac')?.value||null;
   var curso   = document.getElementById('f-curso')?.value;
