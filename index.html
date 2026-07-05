@@ -1317,18 +1317,25 @@ function checkScheduleConflict(salon, desde, hasta, fechaIni, fechaFin, excludeC
   const excludeIds = Array.isArray(excludeCursoId) ? excludeCursoId.filter(Boolean) : (excludeCursoId?[excludeCursoId]:[]);
   for(const c of STATE.cursos){
     if(excludeIds.includes(c.id)) continue;
-    const grupos = c.grupos&&c.grupos.length ? c.grupos : [{
+    const tieneGruposReales = c.grupos && c.grupos.length > 0;
+    const grupos = tieneGruposReales ? c.grupos : [{
       id:'_main',salon:c.salon,horarioDesde:c.horarioDesde||'',horarioHasta:c.horarioHasta||'',
       fechaInicio:c.fechaInicio,fechaFin:c.fechaFin,nombre:c.nombre,dia:c.dia||''
     }];
     for(const g of grupos){
       if(g.id===excludeGrupoId) continue;
-      if((g.salon||c.salon)!==salon) continue;
+      // FIX: cuando el curso TIENE grupos reales, cada grupo debe tener SU PROPIO salón.
+      // Antes se hacía fallback a c.salon (salón del curso padre) si el grupo no tenía uno propio,
+      // lo que causaba falsos conflictos: un grupo sin salón asignado "heredaba" el salón general
+      // del curso y bloqueaba salones que en realidad estaban libres.
+      const salonG = tieneGruposReales ? g.salon : (g.salon||c.salon);
+      if(!salonG) continue; // grupo sin salón definido — no se puede comparar, se omite (no bloquea)
+      if(salonG!==salon) continue;
       if(!g.horarioDesde||!g.horarioHasta) continue;
       if(!diasOverlap(dia, g.dia||c.dia)) continue;
       if(timeOverlap(desde,hasta,g.horarioDesde,g.horarioHasta) &&
          dateOverlap(fechaIni,fechaFin,g.fechaInicio||c.fechaInicio,g.fechaFin||c.fechaFin)){
-        return `${c.nombre}${g.nombre&&g.nombre!==c.nombre?' — '+g.nombre:''} (${g.salon||c.salon} ${g.horarioDesde}-${g.horarioHasta}${(g.dia||c.dia)?' · '+(g.dia||c.dia):''})`;
+        return `${c.nombre}${g.nombre&&g.nombre!==c.nombre?' — '+g.nombre:''} (${salonG} ${g.horarioDesde}-${g.horarioHasta}${(g.dia||c.dia)?' · '+(g.dia||c.dia):''})`;
       }
     }
   }
