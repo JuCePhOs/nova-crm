@@ -7393,7 +7393,11 @@ cont.innerHTML='<div style="font-size:13px;font-weight:700;color:var(--text2);ma
     +'<div><span style="color:var(--text3)">Total a pagar</span><br><strong id="mi-total" style="font-size:20px;color:var(--green)">—</strong></div>'
     +'</div>'
     +'<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">'
-    +'<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px">Ajustar total — precio base: <span id="mi-min-txt">$0</span></div>'
+    +'<div style="display:flex;gap:8px;margin-bottom:8px">'
+    +'<label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer"><input type="radio" name="mi-modo-precio" value="total" checked onchange="onModoPrecioChange()"> Total a repartir</label>'
+    +'<label style="display:flex;align-items:center;gap:5px;font-size:11px;cursor:pointer"><input type="radio" name="mi-modo-precio" value="cada" onchange="onModoPrecioChange()"> Precio fijo c/u (no se reparte)</label>'
+    +'</div>'
+    +'<div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px" id="mi-total-label">Ajustar total — precio base: <span id="mi-min-txt">$0</span></div>'
     +'<input type="number" id="mi-total-input" step="1" style="width:100%;padding:7px 10px;border:2px solid var(--accent);border-radius:7px;font-size:15px;font-weight:700;color:var(--accent);box-sizing:border-box" oninput="onManualTotalChange()">'
     +'<div id="mi-dist-box" style="display:none;margin-top:7px;font-size:11px;color:var(--text3);padding:6px 10px;background:var(--surface);border-radius:6px;border:1px solid var(--border)">'
     +'<strong style="color:var(--text2)">Distribución:</strong> <span id="mi-dist-txt"></span></div>'
@@ -7403,6 +7407,25 @@ cont.innerHTML='<div style="font-size:13px;font-weight:700;color:var(--text2);ma
 }
 
 
+function onModoPrecioChange(){
+  var modoEl=document.querySelector('input[name="mi-modo-precio"]:checked');
+  var modo=modoEl?modoEl.value:'total';
+  var lbl=document.getElementById('mi-total-label');
+  var inp=document.getElementById('mi-total-input');
+  if(!lbl||!inp)return;
+  var n=parseInt((document.getElementById('mi-count')||{}).textContent)||1;
+  if(modo==='cada'){
+    lbl.innerHTML='Precio POR CADA grupo (no se reparte) — <span id="mi-min-txt">$0</span>';
+    // Convertir el valor actual (total) a precio por grupo, para no perder lo escrito
+    var totalActual=Math.floor(parseFloat(inp.value)||0);
+    if(totalActual>0&&n>0) inp.value=Math.round(totalActual/n);
+  } else {
+    lbl.innerHTML='Ajustar total — precio base: <span id="mi-min-txt">$0</span>';
+    var porGrupoActual=Math.floor(parseFloat(inp.value)||0);
+    if(porGrupoActual>0&&n>0) inp.value=porGrupoActual*n;
+  }
+  onManualTotalChange();
+}
 function distribuirPago(total,n){
   total=Math.floor(total);
   if(n<=0)return [];
@@ -7604,7 +7627,14 @@ async function _guardarMatriculasMultiplesImpl(){
     motivoAuthM=prompt(msgAuth);
     if(motivoAuthM===null)return; // canceló
   }
-  var dist=distribuirPago(totalPago,n);
+  var modoPrecioEl=document.querySelector('input[name="mi-modo-precio"]:checked');
+  var modoPrecio=modoPrecioEl?modoPrecioEl.value:'total';
+  // Si modo="cada": totalPago YA es el precio POR GRUPO (no un total a repartir).
+  // Cada folio recibe el monto COMPLETO, no una fracción. El total real del paquete es totalPago*n.
+  var dist = modoPrecio==='cada'
+    ? Array(n).fill(totalPago) // precio fijo completo en cada folio
+    : distribuirPago(totalPago,n); // reparte el total entre los n folios
+  var totalPaqueteReal = modoPrecio==='cada' ? totalPago*n : totalPago;
 
   // Method
   var pagoStatusEl=document.querySelector('input[name="f-pago-status"]:checked');
@@ -7632,7 +7662,7 @@ async function _guardarMatriculasMultiplesImpl(){
       salon:grupo?grupo.salon||'':'',
       notas:notas+(notas?' | ':'')+'Paquete '+n+' grupo'+(n>1?'s':'')+' — Folio #'+folio,
       createdAt:new Date().toISOString(),createdBy:currentUser.username,
-      enPaquete:true,paqueteTotal:totalPago,paqueteFolios:[]
+      enPaquete:true,paqueteTotal:totalPaqueteReal,paqueteFolios:[]
     });
   });
 
@@ -7645,9 +7675,9 @@ async function _guardarMatriculasMultiplesImpl(){
   // pero marcar los no-master como paqueteSlave:true para que Contabilidad
   // solo cree 1 ingreso combinado (del master) con el total completo del paquete.
   if(yaPagado&&totalPago>0){
-    var notasPaquete='Paquete '+n+' grupo'+(n>1?'s':'')+' — Total $'+totalPago.toLocaleString('es-MX')+' — Folios #'+foliosCreados.join(', #');
+    var notasPaquete='Paquete '+n+' grupo'+(n>1?'s':'')+' — Total $'+totalPaqueteReal.toLocaleString('es-MX')+' — Folios #'+foliosCreados.join(', #');
     foliosCreados.forEach(function(folio,idx){
-      var montoFolio=dist[idx]||Math.floor(totalPago/n);
+      var montoFolio=dist[idx]||(modoPrecio==='cada'?totalPago:Math.floor(totalPago/n));
       var commF=0,ivaF=0,netoF=montoFolio;
       if(metodo==='card'){commF=+(montoFolio*0.035).toFixed(2);ivaF=+(commF*0.16).toFixed(2);netoF=+(montoFolio-commF-ivaF).toFixed(2);}
       STATE.pagosRegulares.push({
@@ -7659,7 +7689,7 @@ async function _guardarMatriculasMultiplesImpl(){
         method:metodo,fecha:fmtFecha(fechaISO),fechaISO,
         notas:notasPaquete,
         paqueteFolios:[...foliosCreados],
-        paqueteTotal:totalPago,
+        paqueteTotal:totalPaqueteReal,
         // Solo el primer folio (master) se sincroniza como ingreso en Contabilidad.
         // Los demás son paqueteSlave:true y el sync los ignora para no crear duplicados.
         paqueteSlave:idx>0,
