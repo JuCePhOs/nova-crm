@@ -2895,7 +2895,7 @@ function renderPagos(){
       <h2>Pagos Regulares</h2>
       <p>${t('pag_subtitulo')} — ${new Date().toLocaleDateString('es-MX',{month:'long',year:'numeric'})}</p>
     </div>
-    ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="diagnosticoPagos()" title="Audita todas las matrículas en busca de inconsistencias"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</button> <button class="btn-primary btn-sm" onclick="inspeccionarFolios()" title="Ver y eliminar pagos de folios específicos con problemas"><i class="ti ti-search"></i> Inspeccionar folios</button> <button class="btn-ghost btn-sm" onclick="repararPagosPaquete()" title="Crea pagos faltantes para folios de paquete (ej. 1186, 1187)"><i class="ti ti-tool"></i> Reparar paquetes</button> <button class="btn-danger btn-sm" onclick="limpiarPagosDuplicados()" title="Elimina pagos duplicados con el mismo folio, mes y monto (deja solo uno)"><i class="ti ti-copy-off"></i> Limpiar duplicados</button>':''}
+    ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="diagnosticoPagos()" title="Audita todas las matrículas en busca de inconsistencias"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</button> <button class="btn-primary btn-sm" onclick="inspeccionarFolios()" title="Ver y eliminar pagos de folios específicos con problemas"><i class="ti ti-search"></i> Inspeccionar folios</button> <button class="btn-ghost btn-sm" onclick="repararPagosPaquete()" title="Crea pagos faltantes para folios de paquete (ej. 1186, 1187)"><i class="ti ti-tool"></i> Reparar paquetes</button> <button class="btn-danger btn-sm" onclick="limpiarPagosDuplicados()" title="Elimina pagos duplicados con el mismo folio, mes y monto (deja solo uno)"><i class="ti ti-copy-off"></i> Limpiar duplicados</button> <button class="btn-primary btn-sm" onclick="fijarMontoIgualPaquete()" title="Pone el mismo monto en cada folio de un paquete existente"><i class="ti ti-coin"></i> Fijar monto igual</button>':''}
   </div>
   <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
     <div class="stat-card" style="--stripe:var(--green)"><div class="stat-label">Contratos al corriente</div><div class="stat-val">${(STATE.matrículas||[]).length-pending}</div><div class="stat-sub">de ${(STATE.matrículas||[]).length} alumnos</div></div>
@@ -3952,6 +3952,38 @@ async function limpiarPagosDuplicados(){
   renderPagos();
   buildSidebar();
   setTimeout(function(){alert('✅ Eliminados '+aEliminar.length+' pago'+(aEliminar.length===1?'':'s')+' duplicado'+(aEliminar.length===1?'':'s')+'.');},200);
+}
+
+async function fijarMontoIgualPaquete(){
+  if(!hasPerm('modo_dios')){alert('Solo el Modo Dios puede usar esta función.');return;}
+  var folioInput=prompt('Escribe UNO de los folios del paquete a corregir:');
+  if(!folioInput)return;
+  var folio=parseInt(folioInput);
+  var pago=(STATE.pagosRegulares||[]).find(function(p){return p.crmFolio===folio;});
+  if(!pago){alert('Folio #'+folio+' no encontrado en pagos.');return;}
+  var fa=Array.isArray(pago.paqueteFolios)?pago.paqueteFolios:Object.values(pago.paqueteFolios||{});
+  if(!fa||fa.length<=1){alert('Folio #'+folio+' no es parte de un paquete (no tiene folios hermanos).');return;}
+  var montoStr=prompt('¿Cuánto debe valer CADA uno de estos '+fa.length+' folios? (#'+fa.join(', #')+')');
+  var monto=parseFloat(montoStr);
+  if(!monto||monto<=0){alert('Monto inválido.');return;}
+  if(!confirm('Se pondrá $'+monto.toLocaleString('es-MX')+' en CADA uno de '+fa.length+' folios: #'+fa.join(', #')+'.\n\nTotal del paquete: $'+(monto*fa.length).toLocaleString('es-MX')+'.\n\n¿Continuar?'))return;
+  fa.forEach(function(f){
+    var p=(STATE.pagosRegulares||[]).find(function(x){return x.crmFolio===f;});
+    var m=(STATE.matrículas||[]).find(function(x){return x.folio===f;});
+    if(p){
+      p.montoFinal=monto;p.montoBase=monto;p.subtotal=monto;
+      var comm=0,iva=0,neto=monto;
+      if(p.method==='card'){comm=+(monto*0.035).toFixed(2);iva=+(comm*0.16).toFixed(2);neto=+(monto-comm-iva).toFixed(2);}
+      p.commMP=comm;p.ivaMP=iva;p.neto=neto;
+      p.editadoEn=new Date().toISOString();
+    }
+    if(m){m.primerPago=monto;m.paqueteTotal=monto*fa.length;}
+  });
+  await saveState();
+  closeModal();
+  renderPagos();
+  buildSidebar();
+  setTimeout(function(){alert('✅ '+fa.length+' folios actualizados a $'+monto.toLocaleString('es-MX')+' cada uno. Total: $'+(monto*fa.length).toLocaleString('es-MX')+'.');},200);
 }
 
 async function eliminarPago(id){
