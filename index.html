@@ -1023,6 +1023,8 @@ function fmtMXN(n){return new Intl.NumberFormat('es-MX',{style:'currency',curren
 function fmtFecha(iso){if(!iso)return'—';const[y,m,d]=iso.split('-');const meses=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];return`${parseInt(d)} de ${meses[parseInt(m)-1]} de ${y}`;}
 function mesLabel(ym){const[y,m]=ym.split('-');const n=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];return`${n[parseInt(m)-1]} ${y}`;}
 function monthStr(){const n=new Date();return`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;}
+const MES_INICIO_ACADEMIA='2026-06'; // Pagos anteriores a este mes pertenecen a la academia previa — el CRM no los solicita
+function paqFolios(x){return Array.isArray(x)?x:Object.values(x||{});} // Firebase puede devolver arrays como objetos con claves numéricas
 function prevMonth(ym){const[y,m]=ym.split('-').map(Number);let py=y,pm=m-1;if(pm<1){pm=12;py--;}return`${py}-${String(pm).padStart(2,'0')}`;}
 function calcNominaInstructoresMes(mesPago){
   // Nómina que se PAGA en "mesPago" = horas finalizadas en el mes ANTERIOR (pago con un mes de retraso).
@@ -1256,6 +1258,7 @@ function pendingPayments(){
     .filter(m=>(STATE.pagosRegulares||[]).some(p=>String(p.crmFolio)===String(m.folio)))
     .map(m=>String(m.folio)));
   return (STATE.matrículas||[]).filter(m=>{
+    if(m.pagoTipo==='unico'&&m.fechaISO&&m.fechaISO.slice(0,7)<MES_INICIO_ACADEMIA) return false; // pago único de la academia anterior
     if(conPagoUnico.has(String(m.folio))) return false; // pago único ya cobrado
     return !pagados.has(String(m.folio));
   }).length||0;
@@ -2241,7 +2244,7 @@ function getSchedulePagos(m, maxMeses){
   if(m.pagoTipo==='unico') maxMeses=1; // pago único: solo 1 fecha
   if(maxMeses==null) maxMeses=6; // null/undefined → 6 por defecto (0 es un valor válido explícito, no se sobreescribe)
   var pagados=(STATE.pagosRegulares||[])
-    .filter(function(p){return p.crmFolio==m.folio||(p.paqueteFolios&&p.paqueteFolios.indexOf(m.folio)>=0);})
+    .filter(function(p){return p.crmFolio==m.folio||paqFolios(p.paqueteFolios).some(function(f){return String(f)===String(m.folio);});})
     .reduce(function(s,p){(p.meses||[]).forEach(function(mes){s[mes]=true;});return s;},{});
   var result=[];
   var startD=new Date(m.fechaISO+'T00:00:00');
@@ -2258,6 +2261,7 @@ function getSchedulePagos(m, maxMeses){
     if(isNaN(d.getTime())) continue; // skip si sigue inválido
     var fISO=d.toISOString().slice(0,10);
     var mes=fISO.slice(0,7);
+    if(mes<MES_INICIO_ACADEMIA) continue; // mes de la academia anterior — no se solicita
     var monto=i===0?(m.primerPago||0):(m.pagoMensual||m.primerPago||0);
     result.push({fechaISO:fISO, mes, pagado:!!pagados[mes], monto, num:i+1});
   }
@@ -2895,7 +2899,7 @@ function renderPagos(){
       <h2>Pagos Regulares</h2>
       <p>${t('pag_subtitulo')} — ${new Date().toLocaleDateString('es-MX',{month:'long',year:'numeric'})}</p>
     </div>
-    ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="diagnosticoPagos()" title="Audita todas las matrículas en busca de inconsistencias"><i class="ti ti-stethoscope"></i> Diagnóstico de pagos</button> <button class="btn-primary btn-sm" onclick="inspeccionarFolios()" title="Ver y eliminar pagos de folios específicos con problemas"><i class="ti ti-search"></i> Inspeccionar folios</button> <button class="btn-ghost btn-sm" onclick="repararPagosPaquete()" title="Crea pagos faltantes para folios de paquete (ej. 1186, 1187)"><i class="ti ti-tool"></i> Reparar paquetes</button> <button class="btn-danger btn-sm" onclick="limpiarPagosDuplicados()" title="Elimina pagos duplicados con el mismo folio, mes y monto (deja solo uno)"><i class="ti ti-copy-off"></i> Limpiar duplicados</button> <button class="btn-primary btn-sm" onclick="fijarMontoIgualPaquete()" title="Pone el mismo monto en cada folio de un paquete existente"><i class="ti ti-coin"></i> Fijar monto igual</button>':''}
+    ${hasPerm('modo_dios')?'<button class="btn-ghost btn-sm" onclick="limpiarPagosHuerfanosCRM()" title="Elimina pagos registrados cuyo folio ya no tiene matrícula activa"><i class="ti ti-trash-x"></i> Limpiar huérfanos</button> <button class="btn-primary btn-sm" onclick="inspeccionarFolios()" title="Ver y eliminar pagos de folios específicos con problemas"><i class="ti ti-search"></i> Inspeccionar folios</button> <button class="btn-ghost btn-sm" onclick="repararPagosPaquete()" title="Crea pagos faltantes para folios de paquete (ej. 1186, 1187)"><i class="ti ti-tool"></i> Reparar paquetes</button> <button class="btn-danger btn-sm" onclick="limpiarPagosDuplicados()" title="Elimina pagos duplicados con el mismo folio, mes y monto (deja solo uno)"><i class="ti ti-copy-off"></i> Limpiar duplicados</button> <button class="btn-primary btn-sm" onclick="fijarMontoIgualPaquete()" title="Pone el mismo monto en cada folio de un paquete existente"><i class="ti ti-coin"></i> Fijar monto igual</button>':''}
   </div>
   <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
     <div class="stat-card" style="--stripe:var(--green)"><div class="stat-label">Contratos al corriente</div><div class="stat-val">${(STATE.matrículas||[]).length-pending}</div><div class="stat-sub">de ${(STATE.matrículas||[]).length} alumnos</div></div>
@@ -3216,6 +3220,7 @@ function buildRegistrarPago(){
   for(let i=-2;i<12;i++){
     const d=new Date();d.setDate(1);d.setMonth(d.getMonth()+i);
     const ym=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    if(ym<MES_INICIO_ACADEMIA) continue; // no ofrecer meses de la academia anterior
     meses.push({ym,label:mesLabel(ym),esPasado:i<0});
   }
 
@@ -3851,9 +3856,12 @@ async function repararPagosPaquete(){
   var mats=STATE.matrículas||[];
   // Identificar todos los grupos de paquetes únicos
   var paquetesMap={};
-  mats.filter(function(m){return m.enPaquete&&m.paqueteFolios&&m.paqueteFolios.length>1;}).forEach(function(m){
-    var key=[...m.paqueteFolios].sort(function(a,b){return a-b;}).join(',');
-    if(!paquetesMap[key]) paquetesMap[key]=m.paqueteFolios;
+  mats.forEach(function(m){
+    if(!m.enPaquete) return;
+    var pf=paqFolios(m.paqueteFolios); // Firebase puede devolver el array como objeto
+    if(pf.length<=1) return;
+    var key=pf.slice().sort(function(a,b){return a-b;}).join(',');
+    if(!paquetesMap[key]) paquetesMap[key]=pf;
   });
   var cambios=[];
   Object.values(paquetesMap).forEach(function(folios){
@@ -3910,13 +3918,13 @@ async function repararPagosPaquete(){
 
 async function limpiarPagosHuerfanosCRM(){
   if(!hasPerm('modo_dios')){alert('Solo el Modo Dios puede usar esta función.');return;}
-  const foliosValidos=new Set((STATE.matrículas||[]).map(m=>m.folio));
-  const huerfanos=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio!=null&&!foliosValidos.has(p.crmFolio));
+  const foliosValidos=new Set((STATE.matrículas||[]).map(m=>String(m.folio)));
+  const huerfanos=(STATE.pagosRegulares||[]).filter(p=>p.crmFolio!=null&&!foliosValidos.has(String(p.crmFolio)));
   if(huerfanos.length===0){alert('✅ No hay pagos huérfanos. Todos los pagos tienen matrícula activa.');return;}
   const detalles=huerfanos.map(p=>`Folio #${p.crmFolio} — ${p.alumnoNombre||'(sin nombre)'} — ${(p.meses||[]).join(', ')} — ${fmtMXN(p.montoFinal||0)}`).join('\n');
   if(!confirm(`🗑️ Eliminar ${huerfanos.length} pago${huerfanos.length===1?'':'s'} huérfano${huerfanos.length===1?'':'s'} de CRM?\n\n${detalles}\n\nContabilidad los eliminará automáticamente en el siguiente ciclo de sincronización.\n\nEsta acción NO se puede deshacer.`))return;
-  const foliosH=new Set(huerfanos.map(p=>p.crmFolio));
-  STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(p=>!foliosH.has(p.crmFolio));
+  const foliosH=new Set(huerfanos.map(p=>String(p.crmFolio)));
+  STATE.pagosRegulares=(STATE.pagosRegulares||[]).filter(p=>!foliosH.has(String(p.crmFolio)));
   await saveState();
   closeModal();
   renderPagos();
@@ -4005,6 +4013,7 @@ function buildPendientes(){
     .filter(m=>(STATE.pagosRegulares||[]).some(p=>String(p.crmFolio)===String(m.folio)))
     .map(m=>String(m.folio)));
   const pendientes=(STATE.matrículas||[]).filter(m=>{
+    if(m.pagoTipo==='unico'&&m.fechaISO&&m.fechaISO.slice(0,7)<MES_INICIO_ACADEMIA) return false; // pago único de la academia anterior
     if(conPagoUnicoB.has(String(m.folio))) return false;
     return !pagados.has(String(m.folio));
   });
@@ -4528,18 +4537,6 @@ async function moverSeleccionadosGrupo(){
   });
   await saveState();closeModal();renderCursos();
 }
-
-async function quitarSeleccionadosGrupo(){
-  var folios=Array.from(window._agSel||[]);
-  if(!folios.length){alert('Selecciona al menos un alumno');return;}
-  if(!confirm('Quitar '+folios.length+' alumno'+(folios.length!==1?'s':'')+' del grupo?')) return;
-  folios.forEach(function(f){
-    var m=(STATE.matrículas||[]).find(function(x){return String(x.folio)===String(f);});
-    if(m){m.grupoId=null;m.grupoNombre=null;}
-  });
-  await saveState();closeModal();renderCursos();
-}
-
 
 async function quitarSeleccionadosGrupo(cursoActual, grupoActual){
   var folios=Array.from(window._agSel||[]);
