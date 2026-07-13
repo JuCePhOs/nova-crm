@@ -3076,8 +3076,12 @@ function buildPagoMasivo(){
     return (p.meses||[]).includes(mesSel);
   }).map(function(p){return p.crmFolio;}));
 
+  var _foliosConPago=new Set((STATE.pagosRegulares||[]).map(function(p){return String(p.crmFolio);}));
   var rows=alumnos.map(function(m){
-    var monto=m.pagoMensual!=null?m.pagoMensual:(m.primerPago||0);
+    // 1er pago del folio → primerPago; siguientes → pagoMensual (o primerPago)
+    var monto=!_foliosConPago.has(String(m.folio))
+      ?(m.primerPago||0)
+      :(m.pagoMensual!=null?m.pagoMensual:(m.primerPago||0));
     var pagado=pagadosSet.has(m.folio);
     var chk=_pagoMasivoSel.has(m.folio);
     var oculto=_pmHideMode&&pagado;
@@ -3326,7 +3330,7 @@ function buildRegistrarPago(){
       </div>
       <div class="form-group">
         <label class="flbl">${t('pag_campo_monto')}</label>
-        <input type="number" id="rp-monto-base" min="0" step="0.01" placeholder="0.00" oninput="calcPagoBreakdown()">
+        <input type="number" id="rp-monto-base" min="0" step="0.01" placeholder="0.00" oninput="this.dataset.auto='0';calcPagoBreakdown()">
       </div>
       <div class="form-group">
         <label class="flbl">${t('pag_campo_promo')}</label>
@@ -3450,16 +3454,23 @@ function onAlumnoChange(){
   if(!folio)return;
   const m=STATE.matrículas.find(x=>x.folio===folio);
   if(!m)return;
-  // Fill monto base from curso cost
+  // Monto propio de la matrícula:
+  // 1er pago del folio (sin pagos previos) → primerPago; siguientes → pagoMensual (o primerPago).
+  // costoBase del curso solo como respaldo si la matrícula no tiene montos.
   const cur=STATE.cursos.find(c=>c.nombre===m.curso);
   const base=cur?parseFloat(String(cur.costoBase||'').replace(/[^0-9.]/g,''))||0:0;
+  const yaTienePago=(STATE.pagosRegulares||[]).some(p=>String(p.crmFolio)===String(folio));
+  const montoPropio=!yaTienePago
+    ?(parseFloat(m.primerPago)||0)
+    :(m.pagoMensual!=null?(parseFloat(m.pagoMensual)||0):(parseFloat(m.primerPago)||0));
+  const montoPrefill=montoPropio>0?montoPropio:base;
   const montoEl=document.getElementById('rp-monto-base');
-  if(montoEl&&!montoEl.value&&base>0)montoEl.value=base;
+  if(montoEl&&montoPrefill>0&&(!montoEl.value||montoEl.dataset.auto==='1')){montoEl.value=montoPrefill;montoEl.dataset.auto='1';}
   // Show info box
   const infoEl=document.getElementById('rp-alumno-info');
   const infoBox=document.getElementById('rp-info-box');
   if(infoEl)infoEl.style.display='block';
-  if(infoBox)infoBox.innerHTML=`<strong>${m.alumno}</strong> · Folio #${m.folio} · <span class="badge badge-admin" style="font-size:11px">${m.curso}</span>${base>0?` · Costo base: <strong>${fmtMXN(base)}</strong>`:''}`;
+  if(infoBox)infoBox.innerHTML=`<strong>${m.alumno}</strong> · Folio #${m.folio} · <span class="badge badge-admin" style="font-size:11px">${m.curso}</span>${(parseFloat(m.primerPago)||0)>0?` · 1er pago: <strong>${fmtMXN(parseFloat(m.primerPago)||0)}</strong>`:''}${m.pagoMensual!=null&&m.pagoMensual!==m.primerPago?` · Mensual: <strong>${fmtMXN(parseFloat(m.pagoMensual)||0)}</strong>`:''}${!yaTienePago?' · <span style="color:var(--accent);font-weight:700">Primer pago de este folio</span>':''}`;
   // Mark covered months
   const covered=new Set(STATE.pagosRegulares.filter(p=>String(p.crmFolio)===String(folio)).flatMap(p=>p.meses||[]));
   document.querySelectorAll('.month-chip').forEach(chip=>{
