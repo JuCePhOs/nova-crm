@@ -2870,6 +2870,8 @@ function exportarExcel(){
 //  PAGOS REGULARES + PROMOCIONES
 // ════════════════════════════════════════════════
 let pagoSubTab='registrar';
+let _fichaFiltro=null; // null | 'ant' | 'nvo' | 'all' — filtro activado al hacer clic en las fichas del desglose
+let _fichaQ=''; // texto de búsqueda dentro del filtro de fichas
 
 function renderPagos(){
   if(!hasPerm('ver_pagos')){document.getElementById('main-content').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><h3>Sin acceso</h3></div>';return;}
@@ -2909,24 +2911,25 @@ function renderPagos(){
   </div>
   <!-- Desglose financiero: anteriores vs nuevos -->
   <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 20px;margin-bottom:16px;display:flex;gap:0;flex-wrap:wrap;align-items:stretch">
-    <div style="flex:1;min-width:150px;padding-right:20px">
+    <div onclick="toggleFichaFiltro('ant')" title="Clic para ver las matrículas pagadas de alumnos anteriores" style="flex:1;min-width:150px;padding-right:20px;cursor:pointer;border-radius:8px${_fichaFiltro==='ant'?';outline:2px solid var(--text3);outline-offset:3px':''}">
       <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Alumnos anteriores</div>
       <div style="font-size:20px;font-weight:700;font-family:'DM Mono',monospace;color:var(--text)">${fmtMXN(_montoAnt)}</div>
       <div style="font-size:11px;color:var(--text3);margin-top:3px">${_pagosAnt.length} pago${_pagosAnt.length===1?'':'s'} cobrado${_pagosAnt.length===1?'':'s'} · ingreso base</div>
     </div>
     <div style="width:1px;background:var(--border);margin:0 20px 0 0;flex-shrink:0"></div>
-    <div style="flex:1;min-width:150px;padding-right:20px">
+    <div onclick="toggleFichaFiltro('nvo')" title="Clic para ver las matrículas pagadas de nuevos inscritos este mes" style="flex:1;min-width:150px;padding-right:20px;cursor:pointer;border-radius:8px${_fichaFiltro==='nvo'?';outline:2px solid var(--accent);outline-offset:3px':''}">
       <div style="font-size:10px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">🆕 Nuevos este mes</div>
       <div style="font-size:20px;font-weight:700;font-family:'DM Mono',monospace;color:var(--accent)">${fmtMXN(_montoNvo)}</div>
       <div style="font-size:11px;color:var(--text3);margin-top:3px">${_pagosNvo.length} pago${_pagosNvo.length===1?'':'s'} · ${_nNuevos} alumno${_nNuevos===1?'':'s'} inscrito${_nNuevos===1?'':'s'} este mes</div>
     </div>
     <div style="width:1px;background:var(--border);margin:0 20px 0 0;flex-shrink:0"></div>
-    <div style="flex:1;min-width:150px">
+    <div onclick="toggleFichaFiltro('all')" title="Clic para ver todas las matrículas pagadas este mes" style="flex:1;min-width:150px;cursor:pointer;border-radius:8px${_fichaFiltro==='all'?';outline:2px solid var(--green);outline-offset:3px':''}">
       <div style="font-size:10px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Total cobrado</div>
       <div style="font-size:24px;font-weight:700;font-family:'DM Mono',monospace;color:var(--green)">${fmtMXN(_montoAnt+_montoNvo)}</div>
       <div style="font-size:11px;color:var(--text3);margin-top:3px">${pagosMes.length} contrato${pagosMes.length===1?'':'s'} de ${(STATE.matrículas||[]).length} matriculados</div>
     </div>
   </div>
+  ${buildFichaFiltroPanel()}
   <div class="tab-nav">
     <button class="tab-btn${pagoSubTab==='registrar'?' active':''}" data-tab="registrar" onclick="switchPagoTab('registrar')"><i class="ti ti-plus"></i> ${t('pag_tab_registrar')}</button>
     <button class="tab-btn${pagoSubTab==='historial'?' active':''}" data-tab="historial" onclick="switchPagoTab('historial')"><i class="ti ti-list"></i> ${t('pag_tab_historial')}</button>
@@ -2944,6 +2947,77 @@ function switchPagoTab(t){
     b.classList.toggle('active', b.dataset.tab===t);
   });
   renderPagoTab();
+}
+
+// ── Filtro por fichas del desglose (Alumnos anteriores / Nuevos / Total cobrado) ──
+function toggleFichaFiltro(tipo){
+  _fichaFiltro=(_fichaFiltro===tipo)?null:tipo; // clic en la ficha activa = quitar filtro
+  _fichaQ='';
+  renderPagos();
+  if(_fichaFiltro){setTimeout(function(){var q=document.getElementById('ficha-q');if(q)q.focus();},50);}
+}
+function _fichaSetQ(v){
+  _fichaQ=v;
+  var el=document.getElementById('ficha-lista');
+  if(el)el.innerHTML=buildFichaLista(); // solo refresca la lista — el input conserva el foco
+}
+function _fichaDatos(){
+  // Pagos del mes actual agrupados por matrícula (folio)
+  const cm=monthStr();
+  const pagosMes=(STATE.pagosRegulares||[]).filter(p=>p.meses&&p.meses.includes(cm));
+  const folioNuevos=new Set((STATE.matrículas||[]).filter(m=>m.fechaISO&&m.fechaISO.startsWith(cm)).map(m=>String(m.folio)));
+  const porFolio={};
+  pagosMes.forEach(function(p){
+    const f=String(p.crmFolio);
+    if(!porFolio[f]){
+      const mat=(STATE.matrículas||[]).find(m=>String(m.folio)===f);
+      porFolio[f]={folio:f,alumno:p.alumnoNombre||(mat?mat.alumno:'—'),curso:p.curso||(mat?mat.curso:'—'),monto:0,metodo:p.method||'',fecha:p.fechaISO||'',nuevo:folioNuevos.has(f)};
+    }
+    porFolio[f].monto+=(p.montoFinal||0);
+    if(p.fechaISO&&p.fechaISO>porFolio[f].fecha){porFolio[f].fecha=p.fechaISO;porFolio[f].metodo=p.method||porFolio[f].metodo;}
+  });
+  return Object.values(porFolio).sort(function(a,b){return Number(a.folio)-Number(b.folio);});
+}
+function buildFichaLista(){
+  var datos=_fichaDatos().filter(function(r){
+    if(_fichaFiltro==='ant'&&r.nuevo)return false;
+    if(_fichaFiltro==='nvo'&&!r.nuevo)return false;
+    return true;
+  });
+  var q=(_fichaQ||'').trim().toLowerCase();
+  if(q)datos=datos.filter(function(r){return r.folio.indexOf(q)>=0||r.alumno.toLowerCase().indexOf(q)>=0;});
+  if(!datos.length)return '<div style="padding:18px;text-align:center;color:var(--text3);font-size:13px">Sin resultados'+(q?' para "'+esc(_fichaQ)+'"':' — ningún pago registrado este mes en este grupo')+'</div>';
+  var MET={cash:'💵 Efectivo',transfer:'🏦 Transferencia',card:'💳 Tarjeta / MP',mixto:'🔀 Mixto'};
+  var total=datos.reduce(function(s,r){return s+r.monto;},0);
+  var rows=datos.map(function(r){return '<tr>'
+    +'<td><span class="folio-tag">#'+r.folio+'</span></td>'
+    +'<td style="font-weight:600">'+esc(r.alumno)+'</td>'
+    +'<td><span class="badge badge-admin">'+esc(r.curso)+'</span></td>'
+    +'<td style="font-family:monospace;font-weight:700;color:var(--green)">'+fmtMXN(r.monto)+'</td>'
+    +'<td style="font-size:12px">'+(MET[r.metodo]||r.metodo||'—')+'</td>'
+    +'<td style="font-size:12px;color:var(--text2)">'+(r.fecha||'—')+'</td>'
+    +'<td>'+(r.nuevo?'<span style="font-size:10px;color:var(--accent);font-weight:700">🆕 NUEVO</span>':'')+'</td>'
+    +'</tr>';}).join('');
+  return '<div style="font-size:11px;color:var(--text3);margin:0 0 6px">'+datos.length+' matrícula'+(datos.length===1?'':'s')+' pagada'+(datos.length===1?'':'s')+' · '+fmtMXN(total)+'</div>'
+    +'<div class="table-wrap"><table>'
+    +'<thead><tr><th>Folio</th><th>Alumno</th><th>Curso</th><th>Pagado (mes)</th><th>Método</th><th>Fecha</th><th></th></tr></thead>'
+    +'<tbody>'+rows+'</tbody></table></div>';
+}
+function buildFichaFiltroPanel(){
+  if(!_fichaFiltro)return '';
+  var titulos={
+    ant:'Matrículas pagadas — Alumnos anteriores',
+    nvo:'Matrículas pagadas — 🆕 Nuevos este mes',
+    all:'Matrículas pagadas — Total cobrado ('+mesLabel(monthStr())+')'
+  };
+  return '<div class="card fade-in" style="margin-bottom:16px;border:1px solid var(--accent)">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">'
+    +'<div style="font-size:13px;font-weight:700">'+titulos[_fichaFiltro]+'</div>'
+    +'<button class="btn-ghost btn-sm" onclick="toggleFichaFiltro(_fichaFiltro)" title="Quitar filtro">✕ Quitar filtro</button>'
+    +'</div>'
+    +'<input id="ficha-q" type="text" placeholder="🔍 Buscar por folio o alumno..." value="'+esc(_fichaQ)+'" oninput="_fichaSetQ(this.value)" autocomplete="off" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;box-sizing:border-box;margin-bottom:10px">'
+    +'<div id="ficha-lista">'+buildFichaLista()+'</div>'
+    +'</div>';
 }
 
 function renderPagoTab(){
