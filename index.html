@@ -1025,6 +1025,36 @@ function mesLabel(ym){const[y,m]=ym.split('-');const n=['Ene','Feb','Mar','Abr',
 function monthStr(){const n=new Date();return`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;}
 const MES_INICIO_ACADEMIA='2026-06'; // Pagos anteriores a este mes pertenecen a la academia previa — el CRM no los solicita
 function paqFolios(x){return Array.isArray(x)?x:Object.values(x||{});} // Firebase puede devolver arrays como objetos con claves numéricas
+function verDetalleIngresosMes(){
+  var cm=monthStr();
+  var pagos=(STATE.pagosRegulares||[]).filter(function(p){return p.meses&&p.meses.includes(cm);})
+    .slice().sort(function(a,b){return Number(a.crmFolio)-Number(b.crmFolio);});
+  var total=pagos.reduce(function(s,p){return s+(p.montoFinal||0);},0);
+  // Detección de duplicados: mismo folio + mismo mes más de una vez
+  var vistos={}, dupKeys={};
+  pagos.forEach(function(p){var k=String(p.crmFolio)+'|'+cm;if(vistos[k])dupKeys[k]=true;vistos[k]=true;});
+  var hayDup=Object.keys(dupKeys).length>0;
+  var rows=pagos.map(function(p){
+    var esDup=dupKeys[String(p.crmFolio)+'|'+cm];
+    return '<tr'+(esDup?' style="background:var(--warn-bg)"':'')+'>'
+      +'<td><span class="folio-tag">#'+esc(p.crmFolio)+'</span>'+(esDup?' <span title="Este folio tiene más de un pago este mes" style="color:var(--warn);font-weight:700;font-size:10px">⚠ DUPLICADO</span>':'')+(p.paqueteSlave?' <span style="font-size:9px;color:var(--text3)">paq.</span>':'')+'</td>'
+      +'<td style="font-weight:600">'+esc(p.alumnoNombre||'—')+'</td>'
+      +'<td style="font-size:11px">'+esc((p.meses||[]).join(', '))+'</td>'
+      +'<td style="font-family:monospace;font-weight:700;color:var(--green)">'+fmtMXN(p.montoFinal||0)+'</td>'
+      +'<td style="font-size:11px;color:var(--text2)">'+esc(p.fechaISO||p.fecha||'—')+'</td>'
+      +'<td style="font-size:11px">'+esc(p.method||'—')+'</td></tr>';
+  }).join('');
+  document.getElementById('modal-container').innerHTML=
+    '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:760px">'
+    +'<div class="modal-header"><h3>💰 Desglose — '+t('dash_ingresos')+' '+mesLabel(cm)+'</h3><button class="modal-close" onclick="closeModal()">×</button></div>'
+    +'<div class="modal-body">'
+    +'<div style="font-size:13px;margin-bottom:10px"><strong>'+pagos.length+'</strong> pago'+(pagos.length===1?'':'s')+' · Total: <strong style="color:var(--green)">'+fmtMXN(total)+'</strong>'
+    +(hayDup?'<div style="margin-top:6px;color:var(--warn);font-weight:700;font-size:12px">⚠ Hay folios con más de un pago este mes — revísalos y elimina el sobrante en Pagos → Historial.</div>':'')
+    +'</div>'
+    +(pagos.length?'<div class="table-wrap"><table><thead><tr><th>Folio</th><th>Alumno</th><th>Mes(es)</th><th>Monto</th><th>Fecha</th><th>Método</th></tr></thead><tbody>'+rows+'</tbody></table></div>'
+      :'<div style="padding:16px;text-align:center;color:var(--text3)">Sin pagos este mes</div>')
+    +'</div></div></div>';
+}
 function prevMonth(ym){const[y,m]=ym.split('-').map(Number);let py=y,pm=m-1;if(pm<1){pm=12;py--;}return`${py}-${String(pm).padStart(2,'0')}`;}
 function calcNominaInstructoresMes(mesPago){
   // Nómina que se PAGA en "mesPago" = horas finalizadas en el mes ANTERIOR (pago con un mes de retraso).
@@ -1357,12 +1387,16 @@ function cursoGrupoLabel(cursoNombre, grupoNombre){
 // ════════════════════════════════════════════════
 //  PROYECCIÓN — HELPERS
 // ════════════════════════════════════════════════
-function alumnosActivosEnMes(ym) {
+function alumnosActivosEnMes(ym, tipoCurso) {
   const [y,m]=ym.split('-').map(Number);
   const mesStart=new Date(y,m-1,1);
   const mesEnd=new Date(y,m,0);
   return STATE.matrículas.filter(mat=>{
     const cur=STATE.cursos.find(c=>c.nombre===mat.curso);
+    // Filtro por tipo de curso: 'regular' excluye temporales; 'temporal' solo temporales.
+    // Curso no encontrado se trata como regular.
+    if(tipoCurso==='regular'&&cur&&cur.tipo==='temporal')return false;
+    if(tipoCurso==='temporal'&&!(cur&&cur.tipo==='temporal'))return false;
     if(!cur)return true;
     const fin=cur.fechaFin?new Date(cur.fechaFin+'T00:00:00'):null;
     const ini=cur.fechaInicio?new Date(cur.fechaInicio+'T00:00:00'):null;
@@ -1371,8 +1405,8 @@ function alumnosActivosEnMes(ym) {
     return true;
   });
 }
-function ingresosMinimosEnMes(ym) {
-  return alumnosActivosEnMes(ym).reduce((s,mat)=>{
+function ingresosMinimosEnMes(ym, tipoCurso) {
+  return alumnosActivosEnMes(ym, tipoCurso).reduce((s,mat)=>{
     const cur=STATE.cursos.find(c=>c.nombre===mat.curso);
     return s+(cur?parseFloat(String(cur.costoBase||'').replace(/[^0-9.]/g,''))||0:0);
   },0);
@@ -1825,7 +1859,9 @@ function renderDashboard(){
   const now=new Date();
   const cm=monthStr();
   const esteMes=mats.filter(m=>{const d=new Date(m.fechaISO||Date.now());return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).length;
-  const pagosMes=pagosR.filter(p=>(p.meses&&p.meses.includes(cm))||(p.fechaISO&&p.fechaISO.startsWith(cm))||(p.fecha&&p.fecha.includes(cm.split('-')[1])));
+  // FIX: SOLO pagos cuyo campo meses incluye el mes actual — misma fórmula que Pagos Regulares y Contabilidad.
+  // (Antes: triple OR que también contaba por fecha de registro y por coincidencia del número de mes en la fecha.)
+  const pagosMes=pagosR.filter(p=>p.meses&&p.meses.includes(cm));
   const ingresosPagosMes=pagosMes.reduce((s,p)=>s+(p.montoFinal||0),0);
   const alumnosPagadosMes=new Set(pagosMes.map(p=>p.alumnoNombre)).size;
   const alumnosPendientes=mats.filter(m=>!pagosMes.some(p=>p.alumnoNombre===m.alumno)).length;
@@ -1853,10 +1889,10 @@ function renderDashboard(){
       <div class="stat-val">${alumnosPagadosMes}</div>
       <div class="stat-sub">${alumnosPendientes} ${t('dash_pendientes')}</div><div style="font-size:10px;color:var(--green);margin-top:4px;font-weight:600">→ Ver pagos</div>
     </div>
-    <div class="stat-card" style="--stripe:#6366f1;cursor:pointer" onclick="navigate('pagos')" title="Ver ingresos">
+    <div class="stat-card" style="--stripe:#6366f1;cursor:pointer" onclick="verDetalleIngresosMes()" title="Ver folios que componen esta suma">
       <div class="stat-label">${t('dash_ingresos')} — ${mesLabel(cm)}</div>
       <div class="stat-val" style="font-size:20px">${fmtMXN(ingresosPagosMes)}</div>
-      <div class="stat-sub">${pagosMes.length} ${t('dash_transacciones')}</div><div style="font-size:10px;color:#6366f1;margin-top:4px;font-weight:600">→ Ver ingresos</div>
+      <div class="stat-sub">${pagosMes.length} ${t('dash_transacciones')}</div><div style="font-size:10px;color:#6366f1;margin-top:4px;font-weight:600">→ Ver desglose por folio</div>
     </div>
     <div class="stat-card" style="--stripe:var(--warn);cursor:pointer" onclick="navigate('dios');setTimeout(function(){var el=document.getElementById('sec-promos');if(el)el.scrollIntoView({behavior:'smooth'});},200)" title="Ver promociones">
       <div class="stat-label">${t('dash_promos')}</div>
@@ -2197,6 +2233,8 @@ function showModalNuevaMatricula(){
           </div>
         </div>
         ${isAdmin?`<div class="form-group"><label class="flbl">${t('mat_campo_fecha')}</label><input type="date" id="f-fecha" value="${todayISO()}"></div>`:'<div></div>'}
+        <div class="form-group"><label class="flbl">Día de pago <span style="font-size:10px;color:var(--text3)">— día del mes para los recordatorios</span></label>
+          <select id="f-dia-pago"><option value="">= día del contrato</option>${Array.from({length:31},(_,i)=>i+1).map(d=>`<option value="${d}">${d}</option>`).join('')}</select></div>
         <div class="form-group span2">
           <label class="flbl">${t('mat_campo_notas')}</label>
           <textarea id="f-notas" rows="2" placeholder="Referencia de transferencia, observaciones…"></textarea>
@@ -2249,7 +2287,9 @@ function getSchedulePagos(m, maxMeses){
   var result=[];
   var startD=new Date(m.fechaISO+'T00:00:00');
   if(isNaN(startD.getTime())) return []; // fechaISO no válido → no calcular
-  var dayOfMonth=startD.getDate();
+  // Día de pago propio de la matrícula (recordatorios): si está definido manda sobre el día del contrato
+  var _dp=parseInt(m.diaPago,10);
+  var dayOfMonth=(_dp>=1&&_dp<=31)?_dp:startD.getDate();
   for(var i=0;i<maxMeses;i++){
     var targetYear=startD.getFullYear();
     var targetMonthIdx=startD.getMonth()+i;
@@ -2387,6 +2427,7 @@ async function _guardarMatriculaImpl(){
   var promoAplicada=promoSelEl&&promoSelEl.value?promoSelEl.value:null;
   STATE.matrículas.push({folio,alumno,nacimiento:nac,curso,titular,email,telefono:tel,
     primerPago:parseFloat(pago),pagoTipo:pagoTipo,pagoMensual:pagoTipo==='unico'?null:pagoMensualFinal,
+    diaPago:(function(){var e=document.getElementById('f-dia-pago');var v=e?parseInt(e.value,10):NaN;return(v>=1&&v<=31)?v:null;})(),
     fecha:fmtFecha(fechaISO),fechaISO,notas,promoAplicada,
     autorizacionPendiente:necesitaAutorizacion||false,
     createdAt:new Date().toISOString(),createdBy:currentUser.username});
@@ -2464,6 +2505,8 @@ function showModalEditarMatricula(folio){
           <label class="flbl">Mensualidad siguiente (MXN) <span style="font-size:10px;color:var(--text3)">— si difiere del primer pago</span></label>
           <input type="number" id="e-pagomensual" value="${m.pagoMensual!=null?m.pagoMensual:m.primerPago||''}"></div>
         ${currentUser.role==='admin'?`<div class="form-group"><label class="flbl">${t('mat_campo_fecha')}</label><input type="date" id="e-fecha" value="${m.fechaISO||todayISO()}"></div>`:'<div></div>'}
+        <div class="form-group"><label class="flbl">Día de pago <span style="font-size:10px;color:var(--text3)">— día del mes para los recordatorios</span></label>
+          <select id="e-dia-pago"><option value="">= día del contrato</option>${Array.from({length:31},(_,i)=>i+1).map(d=>`<option value="${d}"${parseInt(m.diaPago,10)===d?' selected':''}>${d}</option>`).join('')}</select></div>
         ${puedeAutorizarPromos()?`<div class="form-group span2">
           <label class="flbl">Creado por <span style="font-size:10px;color:var(--text3)">(determina a quién se le suman las comisiones de esta matrícula)</span></label>
           <select id="e-creadopor">${(STATE.usuarios||[]).map(u=>`<option value="${u.username}"${u.username===m.createdBy?' selected':''}>${u.name||u.username} (${u.username})</option>`).join('')}</select>
@@ -2689,6 +2732,7 @@ async function guardarEdicion(folio){
     pagoTipo:(document.getElementById('e-pagotipo')&&document.getElementById('e-pagotipo').value)||'mensual',
     pagoMensual:(function(){var pt=document.getElementById('e-pagotipo');var pm=document.getElementById('e-pagomensual');if(pt&&pt.value==='unico')return null;return pm?parseFloat(pm.value)||nuevoPago:nuevoPago;})(),
     fechaISO,fecha:fmtFecha(fechaISO),
+    diaPago:(function(){var e=document.getElementById('e-dia-pago');var v=e?parseInt(e.value,10):NaN;return(v>=1&&v<=31)?v:null;})(),
     autorizacionPendiente:necesitaAutorizacion||false,
   };
   if(necesitaAutorizacion){
@@ -5564,21 +5608,25 @@ function renderProyeccion() {
     months.push(ym);
   }
 
-  // Timeline data
+  // Timeline data — SOLO cursos regulares: proyección del ingreso constante mes a mes.
+  // Los cursos temporales se miden aparte (1 sola vez, no recurrentes).
   const timeline = months.map(ym=>({
     ym, label:mesLabel(ym),
-    count:alumnosActivosEnMes(ym).length,
-    income:ingresosMinimosEnMes(ym),
+    count:alumnosActivosEnMes(ym,'regular').length,
+    income:ingresosMinimosEnMes(ym,'regular'),
     finalizan:cursosQueFinalizanEnMes(ym).length,
     inician:cursosQueInicianEnMes(ym).length,
   }));
 
   const maxCount = Math.max(...timeline.map(t=>t.count), 1);
 
-  // Current selected month detail
-  const activos = alumnosActivosEnMes(proyMes);
+  // Current selected month detail — regulares
+  const activos = alumnosActivosEnMes(proyMes,'regular');
   const finalizan = cursosQueFinalizanEnMes(proyMes);
   const inician = cursosQueInicianEnMes(proyMes);
+  // Temporada (cursos temporales) del mes seleccionado
+  const activosTemp = alumnosActivosEnMes(proyMes,'temporal');
+  const incomeTemp = ingresosMinimosEnMes(proyMes,'temporal');
 
   // Group activos by course
   const porCurso = {};
@@ -5589,7 +5637,7 @@ function renderProyeccion() {
     porCurso[mat.curso].costo=cur?parseFloat(String(cur.costoBase||'').replace(/[^0-9.]/g,''))||0:0;
   });
 
-  const totalIncome = ingresosMinimosEnMes(proyMes);
+  const totalIncome = ingresosMinimosEnMes(proyMes,'regular');
 
   // Courses ending within next 60 days
   const hoy=new Date();
@@ -5610,13 +5658,18 @@ function renderProyeccion() {
   <div class="stats-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:24px">
     <div class="stat-card" style="--stripe:var(--accent)">
       <div class="stat-label">📅 ${mesLabel(monthStr())}</div>
-      <div class="stat-val">${alumnosActivosEnMes(monthStr()).length}</div>
-      <div class="stat-sub">${t('proy_alumnos_activos')}</div>
+      <div class="stat-val">${alumnosActivosEnMes(monthStr(),'regular').length}</div>
+      <div class="stat-sub">alumnos REGULARES activos</div>
     </div>
     <div class="stat-card" style="--stripe:var(--green)">
-      <div class="stat-label">💰 ${t('proy_ingresos_min')}</div>
-      <div class="stat-val" style="font-size:19px">${fmtMXN(ingresosMinimosEnMes(monthStr()))}</div>
-      <div class="stat-sub">${mesLabel(monthStr())}</div>
+      <div class="stat-label">💰 Proyección regulares</div>
+      <div class="stat-val" style="font-size:19px">${fmtMXN(ingresosMinimosEnMes(monthStr(),'regular'))}</div>
+      <div class="stat-sub">ingreso constante · ${mesLabel(monthStr())}</div>
+    </div>
+    <div class="stat-card" style="--stripe:#f59e0b">
+      <div class="stat-label">🎪 Temporada (temporales)</div>
+      <div class="stat-val" style="font-size:19px">${fmtMXN(ingresosMinimosEnMes(monthStr(),'temporal'))}</div>
+      <div class="stat-sub">${alumnosActivosEnMes(monthStr(),'temporal').length} alumnos · pago 1 sola vez · referencia para el próximo año</div>
     </div>
     <div class="stat-card" style="--stripe:var(--danger)">
       <div class="stat-label">⚠️ ${t('proy_finalizan')}</div>
@@ -5691,7 +5744,8 @@ function renderProyeccion() {
     </select>
     <div style="font-size:13px;color:var(--text2)">
       <strong style="color:var(--accent);font-size:18px">${activos.length}</strong> ${t('proy_alumnos_activos')}
-      · <strong style="color:var(--green)">${fmtMXN(totalIncome)}</strong> ${t('proy_ingresos_min')}
+      · <strong style="color:var(--green)">${fmtMXN(totalIncome)}</strong> ${t('proy_ingresos_min')} <span style="color:var(--text3)">(solo regulares)</span>
+      ${activosTemp.length>0?` · <span style="color:#f59e0b;font-weight:700">🎪 Temporada: ${fmtMXN(incomeTemp)} (${activosTemp.length} alumnos, no recurrente)</span>`:''}
     </div>
   </div>
 
@@ -7770,6 +7824,7 @@ async function _guardarMatriculasMultiplesImpl(){
       folio,alumno,nacimiento:nac,curso,titular,email,telefono:tel,
       primerPago:dist[idx]||precioPorGrupo,
       pagoTipo:pagoTipoMulti,
+      diaPago:(function(){var e=document.getElementById('f-dia-pago');var v=e?parseInt(e.value,10):NaN;return(v>=1&&v<=31)?v:null;})(),
       fecha:fmtFecha(fechaISO),fechaISO,
       grupoId:gid,
       grupoNombre:grupo?grupo.nombre:'',
@@ -8398,6 +8453,87 @@ function renderTarjetaHorarioAdmin(t){
 // ════════════════════════════════════════════════
 //  ASISTENCIAS ADMIN: historial completo y editable
 // ════════════════════════════════════════════════
+// ── Exportación de asistencias a Excel ──────────────────────────────────────
+function _asisGrupoIdx(){
+  var idx={};
+  (STATE.cursos||[]).forEach(function(c){
+    var grupos=(c.grupos&&c.grupos.length)?c.grupos:[{id:'_main_'+c.id,nombre:c.nombre}];
+    grupos.forEach(function(g){ idx[g.id]={c:c,g:g}; });
+  });
+  return idx;
+}
+function abrirModalExportAsistencias(){
+  var cursosOpts=(STATE.cursos||[]).map(function(c){return '<option value="'+esc(c.nombre)+'">'+esc(c.nombre)+'</option>';}).join('');
+  var idx=_asisGrupoIdx();
+  var gruposOpts=Object.keys(idx).map(function(gid){
+    var e=idx[gid];var lbl=gid.indexOf('_main_')===0?e.c.nombre:e.c.nombre+' — '+e.g.nombre;
+    return '<option value="'+esc(gid)+'">'+esc(lbl)+'</option>';
+  }).join('');
+  var alumnosOpts=(STATE.matrículas||[]).slice().sort(function(a,b){return String(a.alumno).localeCompare(String(b.alumno));})
+    .map(function(m){return '<option value="'+esc(String(m.folio))+'">#'+esc(String(m.folio))+' — '+esc(m.alumno)+'</option>';}).join('');
+  document.getElementById('modal-container').innerHTML=
+    '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:480px">'
+    +'<div class="modal-header"><h3>📥 Exportar asistencias a Excel</h3><button class="modal-close" onclick="closeModal()">×</button></div>'
+    +'<div class="modal-body">'
+    +'<div class="form-group"><label class="flbl">Filtrar por</label>'
+    +'<select id="exp-asis-modo" onchange="_expAsisModo()">'
+    +'<option value="grupo">Por grupo</option>'
+    +'<option value="curso">Por curso completo</option>'
+    +'<option value="alumno">Por alumno</option>'
+    +'</select></div>'
+    +'<div class="form-group" id="exp-asis-grupo-cont"><label class="flbl">Grupo</label><select id="exp-asis-grupo">'+gruposOpts+'</select></div>'
+    +'<div class="form-group" id="exp-asis-curso-cont" style="display:none"><label class="flbl">Curso</label><select id="exp-asis-curso">'+cursosOpts+'</select></div>'
+    +'<div class="form-group" id="exp-asis-alumno-cont" style="display:none"><label class="flbl">Alumno</label><select id="exp-asis-alumno">'+alumnosOpts+'</select></div>'
+    +'<div class="form-actions"><button class="btn-ghost" onclick="closeModal()">Cancelar</button>'
+    +'<button class="btn-primary" onclick="exportarAsistenciasXLSX()">📥 Exportar</button></div>'
+    +'</div></div></div>';
+}
+function _expAsisModo(){
+  var modo=document.getElementById('exp-asis-modo').value;
+  document.getElementById('exp-asis-grupo-cont').style.display=modo==='grupo'?'block':'none';
+  document.getElementById('exp-asis-curso-cont').style.display=modo==='curso'?'block':'none';
+  document.getElementById('exp-asis-alumno-cont').style.display=modo==='alumno'?'block':'none';
+}
+function exportarAsistenciasXLSX(){
+  var modo=document.getElementById('exp-asis-modo').value;
+  var idx=_asisGrupoIdx();
+  var asistencias=(STATE.asistencias||[]).slice().sort(function(a,b){return a.fecha.localeCompare(b.fecha);});
+  var EST={asistencia:'Asistencia',retardo:'Retardo',falta:'Falta'};
+  var filas=[]; // [Fecha, Curso, Grupo, Folio, Alumno, Estado]
+  var nombreArchivo='Asistencias';
+  asistencias.forEach(function(asis){
+    var info=idx[asis.grupoId];
+    var cursoN=info?info.c.nombre:'—';
+    var grupoN=info?(asis.grupoId.indexOf('_main_')===0?'(curso completo)':info.g.nombre):'—';
+    if(modo==='grupo'&&asis.grupoId!==document.getElementById('exp-asis-grupo').value)return;
+    if(modo==='curso'&&cursoN!==document.getElementById('exp-asis-curso').value)return;
+    (asis.registros||[]).forEach(function(r){
+      if(modo==='alumno'&&String(r.folio)!==String(document.getElementById('exp-asis-alumno').value))return;
+      var mat=(STATE.matrículas||[]).find(function(m){return String(m.folio)===String(r.folio);});
+      filas.push([asis.fecha,cursoN,grupoN,String(r.folio),(mat?mat.alumno:(r.alumno||'—')),EST[r.estado]||r.estado||'—']);
+    });
+  });
+  if(modo==='grupo'){var eG=idx[document.getElementById('exp-asis-grupo').value];nombreArchivo+='_'+((eG?(eG.g.nombre||eG.c.nombre):'grupo').replace(/[^\w-]/g,'_'));}
+  if(modo==='curso')nombreArchivo+='_'+document.getElementById('exp-asis-curso').value.replace(/[^\w-]/g,'_');
+  if(modo==='alumno')nombreArchivo+='_folio'+document.getElementById('exp-asis-alumno').value;
+  if(!filas.length){alert('Sin registros de asistencia para ese filtro.');return;}
+  // Resumen por alumno
+  var res={};
+  filas.forEach(function(f){
+    var k=f[3];
+    if(!res[k])res[k]={folio:f[3],alumno:f[4],Asistencia:0,Retardo:0,Falta:0};
+    if(res[k][f[5]]!=null)res[k][f[5]]++;
+  });
+  var resumen=Object.values(res).map(function(r){return[r.folio,r.alumno,r.Asistencia,r.Retardo,r.Falta,r.Asistencia+r.Retardo+r.Falta];});
+  var wb=XLSX.utils.book_new();
+  var ws=XLSX.utils.aoa_to_sheet([['Fecha','Curso','Grupo','Folio','Alumno','Estado']].concat(filas));
+  XLSX.utils.book_append_sheet(wb,ws,'Registros');
+  var ws2=XLSX.utils.aoa_to_sheet([['Folio','Alumno','Asistencias','Retardos','Faltas','Total sesiones']].concat(resumen));
+  XLSX.utils.book_append_sheet(wb,ws2,'Resumen');
+  XLSX.writeFile(wb,nombreArchivo+'_'+todayISO()+'.xlsx');
+  closeModal();
+}
+
 function renderAsistenciasAdmin(){
   var mc=document.getElementById('main-content');
   if(!mc) return;
@@ -8438,8 +8574,9 @@ function renderAsistenciasAdmin(){
       +'<div style="display:none">'+filas+'</div></div>';
   }).join('');
   mc.innerHTML='<div class="cnt fade-in">'
-    +'<div class="page-hdr"><div><div class="page-title">Registro de Asistencias</div>'
-    +'<div class="page-sub">Historial completo - editable por administradores y God</div></div></div>'
+    +'<div class="page-hdr" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><div><div class="page-title">Registro de Asistencias</div>'
+    +'<div class="page-sub">Historial completo - editable por administradores y God</div></div>'
+    +'<button class="btn-primary btn-sm" onclick="abrirModalExportAsistencias()" title="Exportar asistencias a Excel">📥 Exportar Excel</button></div>'
     +(asistencias.length===0
       ?'<div class="empty"><div class="empty-icon">📋</div><div class="empty-ttl">Sin asistencias registradas</div>'
        +'<div class="empty-sub">Se registran durante las clases en la pestana Horarios.</div></div>'
