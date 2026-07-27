@@ -1304,7 +1304,7 @@ const USUARIOS_DEFAULT=[
   {id:'u2',username:'recep',password:'recep',role:'recepcionista',name:'Recepcionista',perms:[...PERMS_POR_ROL.recepcionista],creado:'01 jun 2026'},
   {id:'u3',username:'inst',password:'inst',role:'instructor',name:'Instructor',perms:[...PERMS_POR_ROL.instructor],creado:'01 jun 2026'},
 ];
-let STATE={matrículas:[],cursos:[],usuarios:[],pagosRegulares:[],promociones:[],alumnosInactivos:[],solicitudesStack:[],instructores:[],sesionesClase:[],pagosGastosMaestros:[],modulosCurso:{},semidiosActivo:false,nextFolio:1001,nextUID:100};
+let STATE={matrículas:[],cursos:[],usuarios:[],pagosRegulares:[],promociones:[],alumnosInactivos:[],solicitudesStack:[],instructores:[],sesionesClase:[],pagosGastosMaestros:[],clasesDiagnostico:[],modulosCurso:{},semidiosActivo:false,nextFolio:1001,nextUID:100};
 let currentUser=null;
 function hasPerm(p){return !!(currentUser?.perms?.includes(p)||currentUser?.permisos?.includes(p));}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).substr(2,6);}
@@ -3344,10 +3344,133 @@ function calcularCotizacion(horas, costoHora){
   var chFinal=ch<300?300:ch;
   return {horas:horas, costoHoraFinal:chFinal, totalOriginal:+(horas*ch).toFixed(2), total:+(horas*chFinal).toFixed(2), ajustado:ch>0&&ch<300};
 }
+function _buildDiagnostico(){
+  var lista=(STATE.clasesDiagnostico||[]).slice().sort(function(a,b){return String(b.fecha||'').localeCompare(String(a.fecha||''));});
+  var instructores=(STATE.usuarios||[]).filter(function(u){return u.role==='instructor'||u.rol==='instructor';});
+  var pend=lista.filter(function(c){return c.resultado==='pendiente';}).length;
+  var insc=lista.filter(function(c){return c.resultado==='inscrito';}).length;
+  var no=lista.filter(function(c){return c.resultado==='no_inscrito';}).length;
+  var cobrado=lista.reduce(function(s,c){return s+(parseFloat(c.monto)||0);},0);
+  return '<div class="page-hdr"><div class="page-title">🎓 Clase diagnóstico</div>'
+    +'<div class="page-sub">Registro de clases muestra para dar seguimiento a prospectos. El pago se refleja en Contabilidad.</div></div>'
+    +'<div class="stats-row" style="margin-bottom:16px">'
+      +'<div class="stat-card"><div class="stat-label">Total registradas</div><div class="stat-value">'+lista.length+'</div></div>'
+      +'<div class="stat-card"><div class="stat-label">⏳ Sin seguimiento</div><div class="stat-value" style="color:var(--warn)">'+pend+'</div></div>'
+      +'<div class="stat-card"><div class="stat-label">✅ Se inscribieron</div><div class="stat-value" style="color:var(--green)">'+insc+'</div></div>'
+      +'<div class="stat-card"><div class="stat-label">✕ No se inscribieron</div><div class="stat-value" style="color:var(--danger)">'+no+'</div></div>'
+      +'<div class="stat-card"><div class="stat-label">💰 Cobrado</div><div class="stat-value">'+fmtMXN(cobrado)+'</div></div>'
+    +'</div>'
+    +'<div class="card" style="max-width:760px;padding:20px;margin-bottom:18px">'
+    +'<div style="font-weight:700;margin-bottom:12px">➕ Registrar clase diagnóstico</div>'
+    +'<div class="form-grid">'
+    +'<div class="form-group"><label class="flbl">Nombre del alumno *</label><input type="text" id="dg-nombre"></div>'
+    +'<div class="form-group"><label class="flbl">Teléfono *</label><input type="tel" id="dg-tel"></div>'
+    +'<div class="form-group"><label class="flbl">Edad</label><input type="number" id="dg-edad" min="1"></div>'
+    +'<div class="form-group"><label class="flbl">Email</label><input type="email" id="dg-email"></div>'
+    +'<div class="form-group span2"><label class="flbl">Tema a enseñar *</label><input type="text" id="dg-tema" placeholder="ej. Introducción a Scratch"></div>'
+    +'<div class="form-group"><label class="flbl">Fecha de la clase</label><input type="date" id="dg-fecha" value="'+todayISO()+'"></div>'
+    +'<div class="form-group"><label class="flbl">Instructor</label><select id="dg-instructor"><option value="">— Sin asignar —</option>'
+      +instructores.map(function(u){return '<option value="'+esc(u.username)+'">'+esc(u.name||u.username)+'</option>';}).join('')+'</select></div>'
+    +'<div class="form-group"><label class="flbl">¿Cómo se enteró?</label><select id="dg-fuente">'
+      +['—','Recomendación','Facebook','Instagram','Google','Volante','Pasó por el local','Otro'].map(function(x){return '<option>'+x+'</option>';}).join('')+'</select></div>'
+    +'<div class="form-group"><label class="flbl">Monto cobrado (MXN)</label><input type="number" id="dg-monto" min="0" step="1" placeholder="0 = sin costo"></div>'
+    +'<div class="form-group"><label class="flbl">Método de pago</label><select id="dg-metodo">'
+      +'<option value="cash">💵 Efectivo</option><option value="transfer">🏦 Transferencia</option><option value="card">💳 Terminal MP</option></select></div>'
+    +'<div class="form-group span2"><label class="flbl">Notas / observaciones de la clase</label><input type="text" id="dg-notas" placeholder="Nivel, intereses, qué le gustó, objeciones…"></div>'
+    +'</div>'
+    +'<div class="form-actions"><button class="btn-primary" onclick="guardarClaseDiagnostico()"><i class="ti ti-device-floppy"></i> Guardar registro</button></div>'
+    +'</div>'
+    +(lista.length===0?'<div class="empty"><div class="empty-icon">🎓</div><h3>Sin clases diagnóstico registradas</h3></div>'
+    :'<div class="table-wrap fade-in"><table><thead><tr>'
+      +'<th>Fecha</th><th>Alumno</th><th>Contacto</th><th>Tema</th><th>Instructor</th><th>Fuente</th><th>Pago</th><th>Seguimiento</th><th></th>'
+      +'</tr></thead><tbody>'
+    +lista.map(function(c){
+      var badge=c.resultado==='inscrito'?'<span class="badge badge-green">✅ Se inscribió'+(c.folioInscrito?' #'+c.folioInscrito:'')+'</span>'
+        :c.resultado==='no_inscrito'?'<span class="badge badge-danger">✕ No se inscribió</span>'
+        :'<span class="badge badge-warn">⏳ Pendiente</span>';
+      return '<tr>'
+        +'<td style="font-size:12px;color:var(--text2);white-space:nowrap">'+(c.fecha||'—')+'</td>'
+        +'<td style="font-weight:600">'+esc(c.nombre||'')+(c.edad?' <span style="font-size:11px;color:var(--text3)">('+c.edad+')</span>':'')+'</td>'
+        +'<td style="font-size:12px;color:var(--text2)">'+esc(c.telefono||'—')+(c.email?'<br>'+esc(c.email):'')+'</td>'
+        +'<td style="font-size:12px">'+esc(c.tema||'—')+(c.notas?'<div style="font-size:10px;color:var(--text3);margin-top:2px">'+esc(c.notas)+'</div>':'')+'</td>'
+        +'<td style="font-size:12px;color:var(--text2)">'+esc(c.instructorNombre||'—')+'</td>'
+        +'<td style="font-size:12px;color:var(--text2)">'+esc(c.fuente||'—')+'</td>'
+        +'<td style="font-family:var(--mono);white-space:nowrap">'+(parseFloat(c.monto)>0?fmtMXN(c.monto)+'<div style="font-size:10px;color:var(--text3)">'+(c.metodo==='cash'?'💵 Efectivo':c.metodo==='transfer'?'🏦 Transf.':'💳 Terminal')+'</div>':'<span style="color:var(--text3)">Sin costo</span>')+'</td>'
+        +'<td>'+badge+'</td>'
+        +'<td style="white-space:nowrap">'
+          +'<button class="btn-ghost btn-sm" title="Marcar seguimiento" onclick="marcarSeguimientoDiag(\''+c.id+'\')">✎</button> '
+          +'<button class="btn-ghost btn-sm" title="Eliminar" onclick="eliminarClaseDiagnostico(\''+c.id+'\')">🗑️</button>'
+        +'</td></tr>';
+    }).join('')+'</tbody></table></div>');
+}
+async function guardarClaseDiagnostico(){
+  var g=function(id){var e=document.getElementById(id);return e?String(e.value||'').trim():'';};
+  var nombre=g('dg-nombre'),tel=g('dg-tel'),tema=g('dg-tema');
+  if(!nombre){alert('Escribe el nombre del alumno.');return;}
+  if(!tel){alert('Escribe el teléfono.');return;}
+  if(!tema){alert('Escribe el tema a enseñar.');return;}
+  var monto=parseFloat(g('dg-monto'))||0;
+  var instUser=g('dg-instructor');
+  var inst=(STATE.usuarios||[]).find(function(u){return u.username===instUser;});
+  STATE.clasesDiagnostico=STATE.clasesDiagnostico||[];
+  STATE.clasesDiagnostico.push({
+    id:uid(),nombre:nombre,telefono:tel,email:g('dg-email'),edad:g('dg-edad')||null,
+    tema:tema,fecha:g('dg-fecha')||todayISO(),
+    instructor:instUser||null,instructorNombre:inst?(inst.name||inst.username):'',
+    fuente:g('dg-fuente'),monto:monto,metodo:g('dg-metodo')||'cash',
+    notas:g('dg-notas'),resultado:'pendiente',folioInscrito:null,
+    createdAt:new Date().toISOString(),createdBy:currentUser.username
+  });
+  await saveState();
+  renderCotizaciones();
+  alert('✅ Clase diagnóstico registrada'+(monto>0?' — el pago aparecerá en Contabilidad en unos segundos.':'.'));
+}
+async function eliminarClaseDiagnostico(id){
+  if(!confirm('¿Eliminar este registro? También se quitará su ingreso en Contabilidad.'))return;
+  STATE.clasesDiagnostico=(STATE.clasesDiagnostico||[]).filter(function(c){return c.id!==id;});
+  await saveState();
+  renderCotizaciones();
+}
+async function marcarSeguimientoDiag(id){
+  var c=(STATE.clasesDiagnostico||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  document.getElementById('modal-container').innerHTML=
+    '<div class="moverlay" onclick="if(event.target===this)closeModal()"><div class="modal" style="max-width:460px">'
+    +'<div class="modal-hdr"><h3>Seguimiento — '+esc(c.nombre)+'</h3><button class="modal-close" onclick="closeModal()">✕</button></div>'
+    +'<div class="form-group" style="margin-bottom:10px"><label class="flbl">Resultado</label>'
+    +'<select id="sg-res" style="width:100%" onchange="document.getElementById(\'sg-folio-c\').style.display=this.value===\'inscrito\'?\'\':\'none\';document.getElementById(\'sg-motivo-c\').style.display=this.value===\'no_inscrito\'?\'\':\'none\';">'
+    +'<option value="pendiente"'+(c.resultado==='pendiente'?' selected':'')+'>⏳ Pendiente</option>'
+    +'<option value="inscrito"'+(c.resultado==='inscrito'?' selected':'')+'>✅ Se inscribió</option>'
+    +'<option value="no_inscrito"'+(c.resultado==='no_inscrito'?' selected':'')+'>✕ No se inscribió</option></select></div>'
+    +'<div class="form-group" id="sg-folio-c" style="margin-bottom:10px;display:'+(c.resultado==='inscrito'?'':'none')+'"><label class="flbl">Folio de matrícula</label><input type="number" id="sg-folio" value="'+(c.folioInscrito||'')+'"></div>'
+    +'<div class="form-group" id="sg-motivo-c" style="margin-bottom:10px;display:'+(c.resultado==='no_inscrito'?'':'none')+'"><label class="flbl">Motivo</label><input type="text" id="sg-motivo" value="'+esc(c.motivo||'')+'" placeholder="Precio, horario, distancia…"></div>'
+    +'<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn-ghost" onclick="closeModal()">Cancelar</button>'
+    +'<button class="btn-primary" onclick="guardarSeguimientoDiag(\''+id+'\')">✓ Guardar</button></div></div></div>';
+}
+async function guardarSeguimientoDiag(id){
+  var c=(STATE.clasesDiagnostico||[]).find(function(x){return x.id===id;});
+  if(!c)return;
+  c.resultado=document.getElementById('sg-res').value;
+  c.folioInscrito=c.resultado==='inscrito'?(parseInt(document.getElementById('sg-folio').value,10)||null):null;
+  c.motivo=c.resultado==='no_inscrito'?String(document.getElementById('sg-motivo').value||'').trim():'';
+  await saveState();
+  closeModal();
+  renderCotizaciones();
+}
+let _cotSubTab='cotizacion';
+function switchCotTab(x){_cotSubTab=x;renderCotizaciones();}
 function renderCotizaciones(){
   var mc=document.getElementById('main-content');
   if(!mc) return;
+  var tabs='<div class="tabs" style="margin-bottom:16px">'
+    +'<button class="tab-btn'+(_cotSubTab==='cotizacion'?' active':'')+'" onclick="switchCotTab(\'cotizacion\')"><i class="ti ti-file-invoice"></i> '+t('cot_titulo')+'</button>'
+    +'<button class="tab-btn'+(_cotSubTab==='diagnostico'?' active':'')+'" onclick="switchCotTab(\'diagnostico\')"><i class="ti ti-school"></i> Clase diagnóstico'
+      +((STATE.clasesDiagnostico||[]).filter(function(c){return c.resultado==='pendiente';}).length>0
+        ?' <span class="sn-badge" style="background:var(--warn);margin-left:4px">'+(STATE.clasesDiagnostico||[]).filter(function(c){return c.resultado==='pendiente';}).length+'</span>':'')
+    +'</button></div>';
+  if(_cotSubTab==='diagnostico'){ mc.innerHTML='<div class="cnt fade-in">'+tabs+_buildDiagnostico()+'</div>'; return; }
   mc.innerHTML='<div class="cnt fade-in">'
+    +tabs
     +'<div class="page-hdr"><div class="page-title">📄 '+t('cot_titulo')+'</div><div class="page-sub">'+t('cot_subtitulo')+'</div></div>'
     +'<div class="card" style="max-width:640px;padding:20px">'
     +'<div class="form-grid">'
