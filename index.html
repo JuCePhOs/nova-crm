@@ -2066,6 +2066,7 @@ function startRealtimeSync(){
       _remotoConteos=_conteosDe(STATE);
       _backupDiario();
       if(!STATE.usuarios||!STATE.usuarios.length)STATE.usuarios=[...USUARIOS_DEFAULT];
+      normalizarTodasLasSesiones();
       _repararIdsFaltantes(); // el listener reemplaza STATE en cada cambio remoto — sin esto, la reparación de loadState() se perdía al instante
       // Los datos ya están aplicados; solo se decide CUÁNDO repintar.
       // El sidebar también depende de los datos remotos (contadores de Mejoras, promos,
@@ -2109,6 +2110,7 @@ async function loadState(){
   if(!STATE.autorizacionesPago)STATE.autorizacionesPago=[];
   if(!STATE.instructores)STATE.instructores=[];
   if(!STATE.sesionesClase)STATE.sesionesClase=[];
+  normalizarTodasLasSesiones(); // corrige horas históricas (segundos y excesos de horario)
   if(!STATE.pagosGastosMaestros)STATE.pagosGastosMaestros=[];
   if(!STATE.asistencias)STATE.asistencias=[];
   if(STATE.tarifaAsistente===undefined)STATE.tarifaAsistente=60;
@@ -13774,6 +13776,7 @@ function autoFinalizarSesionesPasadas(){
         s[horasKey]=+tramosAutoRol.reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
       }
       s[campo]='finalizada';
+      if(normalizarTramosSesion(s)) {}
       changed=true;
     });
   });
@@ -14156,6 +14159,106 @@ async function comenzarClaseHorario(gid, cid, rol){
   refreshCurrentView(); // permanecer en la vista actual (admin: horarios_admin / instructor: horarios)
 }
 
+// ── Normalización de horas contabilizadas ───────────────────────────────────
+// Regla: lo que se paga debe coincidir EXACTAMENTE con el horario que se ve en el
+// calendario (HH:MM) y nunca salirse del horario oficial del curso/grupo:
+//   · el conteo arranca en el horario oficial de inicio (abrir antes no suma),
+//   · el conteo cierra en el horario oficial de fin (cerrar después no suma),
+//   · los segundos se descartan (09:00:55 → 09:00), que es la causa de totales
+//     como 1.48 hrs en una clase de 09:00 a 10:30.
+function _pisoMinuto(d){ var x=new Date(d); if(isNaN(x.getTime()))return null; x.setSeconds(0,0); return x; }
+function _horaSesionISO(fecha, hhmm){
+  if(!fecha||!hhmm) return null;
+  var p=String(hhmm).split(':').map(Number);
+  if(isNaN(p[0])) return null;
+  var d=new Date(fecha+'T00:00:00');
+  if(isNaN(d.getTime())) return null;
+  d.setHours(p[0], p[1]||0, 0, 0);
+  return d;
+}
+function _ventanaOficialSesion(s){
+  // Las clases dadas de alta a mano llevan su propio horario: no se recortan contra
+  // el horario del curso (pueden ser reposiciones fuera del horario habitual).
+  var hr=_horarioDeGrupo(s.cursoId, s.grupoId);
+  var hd=s.horarioDesde||(s.manual?'':hr.desde);
+  var hh=s.horarioHasta||(s.manual?'':hr.hasta);
+  var desde=_horaSesionISO(s.fecha, hd), hasta=_horaSesionISO(s.fecha, hh);
+  if(desde&&hasta&&hasta.getTime()<=desde.getTime()) hasta=new Date(hasta.getTime()+86400000);
+  return {desde:desde, hasta:hasta};
+}
+// Ajusta un par entrada/salida y devuelve {ini, fin, horas} ya normalizados.
+function _ajustarRango(iniISO, finISO, v){
+  var iniRaw=new Date(iniISO); if(isNaN(iniRaw.getTime())) return null;
+  var finRaw=finISO?new Date(finISO):null; if(finRaw&&isNaN(finRaw.getTime())) finRaw=null;
+  // Tolerancia de 1 minuto: el click de comenzar/finalizar nunca cae exacto en el
+  // segundo 00, y esos segundos son los que producían totales como 1.48 en vez de 1.50.
+  var TOL=60000;
+  if(v.desde&&Math.abs(iniRaw.getTime()-v.desde.getTime())<=TOL) iniRaw=new Date(v.desde.getTime());
+  if(v.hasta&&finRaw&&Math.abs(finRaw.getTime()-v.hasta.getTime())<=TOL) finRaw=new Date(v.hasta.getTime());
+  var ini=_pisoMinuto(iniRaw);
+  if(!ini) return null;
+  var fin=finRaw?_pisoMinuto(finRaw):null;
+  // Solo se recorta si el tramo realmente cae dentro del horario oficial; un tramo
+  // completamente fuera (clase movida de horario) se respeta tal cual.
+  var dentro=!!(v.desde&&v.hasta) && (!fin||fin.getTime()>v.desde.getTime()) && ini.getTime()<v.hasta.getTime();
+  if(dentro){
+    if(ini.getTime()<v.desde.getTime()) ini=new Date(v.desde.getTime());
+    if(fin&&fin.getTime()>v.hasta.getTime()) fin=new Date(v.hasta.getTime());
+  }
+  if(fin&&fin.getTime()<ini.getTime()) fin=new Date(ini.getTime());
+  return {ini:ini, fin:fin, horas:fin?+Math.max(0,(fin.getTime()-ini.getTime())/3600000).toFixed(2):0};
+}
+function normalizarTramosSesion(s){
+  if(!s) return false;
+  var v=_ventanaOficialSesion(s), cambio=false;
+  ['tramosP','tramosA'].forEach(function(k){
+    (s[k]||[]).forEach(function(tr){
+      if(!tr||!tr.inicio) return;
+      var r=_ajustarRango(tr.inicio, tr.fin, v);
+      if(!r) return;
+      var isoI=r.ini.toISOString();
+      if(tr.inicio!==isoI){ tr.inicio=isoI; cambio=true; }
+      if(tr.fin){
+        var isoF=r.fin.toISOString();
+        if(tr.fin!==isoF){ tr.fin=isoF; cambio=true; }
+        if((tr.horas||0)!==r.horas){ tr.horas=r.horas; cambio=true; }
+      }
+    });
+  });
+  (s.participantes||[]).forEach(function(p){
+    if(!p||!p.entrada) return;
+    var r=_ajustarRango(p.entrada, p.salida, v);
+    if(!r) return;
+    var isoI=r.ini.toISOString();
+    if(p.entrada!==isoI){ p.entrada=isoI; cambio=true; }
+    if(p.salida){
+      var isoF=r.fin.toISOString();
+      if(p.salida!==isoF){ p.salida=isoF; cambio=true; }
+      if((p.horasTrabajadas||0)!==r.horas){ p.horasTrabajadas=r.horas; cambio=true; }
+      var pago=+(r.horas*(p.tarifa||0)).toFixed(2);
+      if((p.pagoSesion||0)!==pago){ p.pagoSesion=pago; cambio=true; }
+    }
+  });
+  // Totales: siempre SUMA de los tramos (o de los participantes si la sesión usa ese
+  // modelo), nunca acumulación incremental.
+  [['tramosP','horasInstructor','principal'],['tramosA','horasAsistente','asistente']].forEach(function(par){
+    var tramos=s[par[0]]||[], tot=null;
+    if(tramos.length){
+      tot=+tramos.reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
+    } else if((s.participantes||[]).length){
+      var ps=(s.participantes||[]).filter(function(p){return p.rol===par[2];});
+      if(ps.length) tot=+ps.reduce(function(a,p){return a+(p.horasTrabajadas||0);},0).toFixed(2);
+    }
+    if(tot!==null&&(s[par[1]]||0)!==tot){ s[par[1]]=tot; cambio=true; }
+  });
+  return cambio;
+}
+function normalizarTodasLasSesiones(){
+  var cambio=false;
+  (STATE.sesionesClase||[]).forEach(function(s){ if(normalizarTramosSesion(s)) cambio=true; });
+  return cambio;
+}
+
 // Tope: el horario programado del grupo (horarioHasta) para la fecha de la sesión.
 // Si el instructor olvida dar click en Finalizar/Pausar, las horas no se siguen
 // contando más allá de este límite.
@@ -14182,6 +14285,7 @@ async function pausarClaseHorario(sesionId, rol){
     else s.horasAsistente=+tramosRol2.reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
   }
   if(rol==='principal') s.estadoP='pausada'; else s.estadoA='pausada';
+  normalizarTramosSesion(s);
   await saveState();
   refreshCurrentView(); // permanecer en la vista actual (admin: horarios_admin / instructor: horarios)
 }
@@ -14223,6 +14327,7 @@ async function finalizarClaseHorario(sesionId, rol){
     else s.horasAsistente=+tramosRol2.reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
   }
   if(rol==='principal') s.estadoP='finalizada'; else s.estadoA='finalizada';
+  normalizarTramosSesion(s);
   await saveState();
   refreshCurrentView(); // permanecer en la vista actual (admin: horarios_admin / instructor: horarios)
 }
@@ -14242,6 +14347,7 @@ async function reabrirClaseHorario(sesionId, rol){
     s.horasAsistente=Math.max(0,(s.horasAsistente||0)-sumHoras);
     s.tramosA=[]; s.estadoA=null;
   }
+  normalizarTramosSesion(s);
   await saveState();
   refreshCurrentView(); // permanecer en la vista actual (admin: horarios_admin / instructor: horarios)
 }
@@ -15508,7 +15614,7 @@ async function toggleInstructor(id){
   await saveState();
   renderMaestros();
 }
-async function adminFinalizarSesion(sesionId, rol){
+async function adminFinalizarSesion(sesionId, rol, instrId){
   var s=(STATE.sesionesClase||[]).find(function(x){return x.id===sesionId;});
   if(!s)return;
   var limite=horarioHastaDeSesion(s);
@@ -15520,12 +15626,15 @@ async function adminFinalizarSesion(sesionId, rol){
   var tr=tramos[tramos.length-1];
   if(tr&&!tr.fin){
     tr.fin=finTime.toISOString();
-    tr.horas=Math.max(0,(finTime-new Date(tr.inicio))/3600000);
-    s[campoHoras]=(s[campoHoras]||0)+tr.horas;
+    tr.horas=+Math.max(0,(finTime-new Date(tr.inicio))/3600000).toFixed(2);
   }
   s[campoEstado]='finalizada';
+  // El total se recalcula como SUMA de tramos, ya recortados al horario oficial.
+  normalizarTramosSesion(s);
+  s[campoHoras]=+(s[campoTramos]||[]).reduce(function(a,t){return a+(t.horas||0);},0).toFixed(2);
   await saveState();
-  showModalSesionesInstructor(instrId, s.mes, true);
+  var _iid=instrId||(rol==='principal'?s.instructorId:s.asistenteId);
+  showModalSesionesInstructor(_iid, s.mes, true);
 }
 
 async function borrarTodasHorasInstructor(instrId, mes){
@@ -15683,6 +15792,7 @@ async function adminEditarHorasTramo(sesionId, instrId, rol, tramoIdx){
 
   // El total de la sesión se recalcula como SUMA de todos los tramos de este rol,
   // nunca como resta/suma incremental, para no arrastrar errores de redondeo.
+  normalizarTramosSesion(s);
   var tramosRol=s[campoTramos]||[];
   s[campoHoras]=+tramosRol.reduce(function(acc,t){return acc+(t.horas||0);},0).toFixed(2);
 
@@ -15707,6 +15817,7 @@ async function adminBorrarTramo(sesionId, instrId, rol, tramoIdx){
     if(rol==='principal'){s.estadoP=null;}
     else{s.estadoA=null;}
   }
+  normalizarTramosSesion(s);
   await saveState();
   showModalSesionesInstructor(instrId, s.mes, true);
 }
@@ -16041,7 +16152,7 @@ function showModalSesionesInstructor(instrId, mesVer, conservarScroll){
             +'</div>';
         }).join('');
       var finBtn=est==='iniciada'
-        ?'<button class="btn-ghost btn-sm" data-sid="'+s.id+'" data-rol="'+rol2+'" onclick="adminFinalizarSesion(this.dataset.sid,this.dataset.rol)" style="font-size:10px">⏹ Finalizar</button>':'';
+        ?'<button class="btn-ghost btn-sm" data-sid="'+s.id+'" data-rol="'+rol2+'" data-iid="'+instrId+'" onclick="adminFinalizarSesion(this.dataset.sid,this.dataset.rol,this.dataset.iid)" style="font-size:10px">⏹ Finalizar</button>':'';
       return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">'
         +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">'
         +'<div style="flex:1"><div style="font-weight:700;font-size:13px">'+fmtDiaLargo(s.fecha)+'</div>'
@@ -16463,6 +16574,9 @@ async function finalizarSesion(sesionId){
 }
 
 function calcularHorasSesion(s){
+  // Se reinician los totales: antes se acumulaban en cada llamada y una misma clase
+  // podía quedar contada dos veces.
+  s.horasInstructor=0; s.horasAsistente=0;
   // For each participant, calculate actual hours worked
   (s.participantes||[]).forEach(function(p){
     var entrada = new Date(p.entrada).getTime();
@@ -16479,6 +16593,7 @@ function calcularHorasSesion(s){
       s.asistenteId = p.instructorId;
     }
   });
+  normalizarTramosSesion(s);
 }
 
 function encontrarModulo(moduloId){
