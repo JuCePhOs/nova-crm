@@ -9586,30 +9586,77 @@ async function eliminarCurso(nombre){
 
 function renderUsuarios(){
   if(!hasPerm('ver_usuarios')){document.getElementById('main-content').innerHTML='<div class="empty"><div class="empty-icon">🔒</div><h3>'+t('sin_acceso')+'</h3></div>';return;}
-  const users=(STATE.usuarios||[]).filter(function(u){return u.role!=='dios';});
-  const rl={admin:t('rol_admin'),recepcionista:t('rol_recep'),instructor:t('rol_inst')};
-  const bc={admin:'badge-admin',recepcionista:'badge-recep',instructor:'badge-inst'};
+  const esDios=hasPerm('modo_dios');
+  let users;
+  if(esDios){
+    users=(STATE.usuarios||[]).slice();
+    (USUARIOS_DEFAULT||[]).forEach(function(d){
+      if(!users.some(function(x){return (x.username||'').toLowerCase()===(d.username||'').toLowerCase();})) users.push(Object.assign({},d,{_solo_default:true}));
+    });
+  } else {
+    users=(STATE.usuarios||[]).filter(function(u){return u.role!=='dios';});
+  }
+  const rl={admin:t('rol_admin'),recepcionista:t('rol_recep'),instructor:t('rol_inst'),dios:'⚡ Modo Dios'};
+  const bc={admin:'badge-admin',recepcionista:'badge-recep',instructor:'badge-inst',dios:'badge-warn'};
   document.getElementById('main-content').innerHTML=`
   <div class="page-header fade-in"><h2>${t('usr_titulo')}</h2><p>${users.length} ${t('usr_registrados')}</p></div>
   <div class="toolbar">
     ${hasPerm('gestionar_usuarios')?`<button class="btn-primary" onclick="showModalNuevoUsuario()"><i class="ti ti-user-plus"></i> ${t('usr_nuevo')}</button>`:''}
+    ${esDios?`<button class="btn-ghost" id="dios-pass-all" onclick="toggleTodasPassDios()"><i class="ti ti-eye"></i> Mostrar contraseñas</button>`:''}
   </div>
   <div class="table-wrap fade-in"><table>
-    <thead><tr><th>${t('usr_nombre')}</th><th>${t('usr_usuario')}</th><th>${t('usr_rol')}</th><th>${t('usr_permisos')}</th><th>${t('usr_creado')}</th>${hasPerm('gestionar_usuarios')?'<th>Acciones</th>':''}</tr></thead>
+    <thead><tr><th>${t('usr_nombre')}</th><th>${t('usr_usuario')}</th>${esDios?'<th>Contraseña</th>':''}<th>${t('usr_rol')}</th><th>${t('usr_permisos')}</th><th>${t('usr_creado')}</th>${hasPerm('gestionar_usuarios')?'<th>Acciones</th>':''}</tr></thead>
     <tbody>
     ${users.map(u=>`<tr>
-      <td style="font-weight:600">${u.name}</td>
-      <td style="font-family:'DM Mono',monospace;font-size:13px">${u.username}</td>
+      <td style="font-weight:600">${esc(u.name)}</td>
+      <td style="font-family:'DM Mono',monospace;font-size:13px">${esc(u.username)}</td>
+      ${esDios?`<td style="white-space:nowrap">
+        <span class="dios-pass" id="dp-${esc(u.id)}" data-pass="${esc(u.password||'')}" data-shown="0"
+              style="font-family:'DM Mono',monospace;font-size:13px;letter-spacing:1px">${u.password?'••••••••':'—'}</span>
+        ${u.password?`<button class="btn-ghost btn-sm" style="margin-left:6px" title="Mostrar/ocultar" onclick="togglePassDios('${esc(u.id)}')"><i class="ti ti-eye"></i></button>
+        <button class="btn-ghost btn-sm" style="margin-left:2px" title="Copiar" onclick="copiarPassDios('${esc(u.id)}')"><i class="ti ti-copy"></i></button>`:''}
+      </td>`:''}
       <td><span class="badge ${bc[u.role]||'badge-neutral'}">${rl[u.role]||u.role}</span></td>
-      <td style="font-size:11px;color:var(--text3)">${(u.perms||[]).length} permiso(s)</td>
+      <td style="font-size:11px;color:var(--text3)">${(u.perms||u.permisos||[]).length} permiso(s)</td>
       <td style="font-size:12px;color:var(--text2)">${u.creado||'—'}</td>
       ${hasPerm('gestionar_usuarios')?`<td>
-        ${u.role!=='dios'?`<button class="btn-ghost btn-sm" onclick="showModalEditarUsuario('${u.id}')" style="margin-right:4px"><i class="ti ti-edit"></i></button>`:''}
-        ${u.id!=='u1'&&u.id!==currentUser.id&&u.role!=='dios'?`<button class="btn-danger btn-sm" onclick="eliminarUsuario('${u.id}')"><i class="ti ti-trash"></i></button>`:''}
+        ${(u.role!=='dios'&&!u._solo_default)?`<button class="btn-ghost btn-sm" onclick="showModalEditarUsuario('${u.id}')" style="margin-right:4px"><i class="ti ti-edit"></i></button>`:''}
+        ${u.id!=='u1'&&u.id!==currentUser.id&&u.role!=='dios'&&!u._solo_default?`<button class="btn-danger btn-sm" onclick="eliminarUsuario('${u.id}')"><i class="ti ti-trash"></i></button>`:''}
       </td>`:''}
     </tr>`).join('')}
     </tbody>
   </table></div>`;
+}
+
+function togglePassDios(id){
+  if(!hasPerm('modo_dios'))return;
+  const el=document.getElementById('dp-'+id); if(!el)return;
+  const shown=el.getAttribute('data-shown')==='1';
+  el.textContent=shown?'••••••••':(el.getAttribute('data-pass')||'—');
+  el.setAttribute('data-shown',shown?'0':'1');
+}
+
+function toggleTodasPassDios(){
+  if(!hasPerm('modo_dios'))return;
+  const nodos=document.querySelectorAll('.dios-pass');
+  let alguno=false;
+  nodos.forEach(function(n){ if(n.getAttribute('data-shown')==='1')alguno=true; });
+  nodos.forEach(function(n){
+    if(!n.getAttribute('data-pass'))return;
+    if(alguno){ n.textContent='••••••••'; n.setAttribute('data-shown','0'); }
+    else { n.textContent=n.getAttribute('data-pass'); n.setAttribute('data-shown','1'); }
+  });
+  const btn=document.getElementById('dios-pass-all');
+  if(btn)btn.innerHTML=alguno?'<i class="ti ti-eye"></i> Mostrar contraseñas':'<i class="ti ti-eye-off"></i> Ocultar contraseñas';
+}
+
+function copiarPassDios(id){
+  if(!hasPerm('modo_dios'))return;
+  const el=document.getElementById('dp-'+id); if(!el)return;
+  const pass=el.getAttribute('data-pass')||'';
+  if(!pass)return;
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(pass).then(function(){alert('Contraseña copiada.');},function(){prompt('Copiar contraseña:',pass);}); }
+  else prompt('Copiar contraseña:',pass);
 }
 
 function showModalNuevoUsuario(){
