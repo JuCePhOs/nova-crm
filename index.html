@@ -4869,20 +4869,26 @@ async function _guardarMatriculaImpl(){
   // FIX: usar costoBase como mínimo cuando pagoMinimo no esté configurado,
   // para que la autorización dispare aunque el campo "pago mínimo" no esté definido.
   var cursoObj=(STATE.cursos||[]).find(function(c){return c.nombre===curso;});
-  var minimoReq=cursoObj?Math.max(cursoObj.pagoMinimo||0, parseFloat(cursoObj.costoBase)||0):0;
+  var _pbAlta=_promoBecaForm('f');
+  var _pisoAlta=pisoPrecioCurso(cursoObj, _pbAlta.promoId, _pbAlta.becaId);
+  var minimoReq=_pisoAlta.piso; // costo del curso menos la promoción/beca marcadas
   var pagoVal=parseFloat(pago)||0;
-  // Si tiene semidios o modo dios puede autorizar directamente
-  var necesitaAutorizacion = minimoReq>0 && pagoVal>0 && pagoVal<minimoReq && !puedeAutorizarPromos();
+  var bajoMinimo = minimoReq>0 && pagoVal>0 && pagoVal<minimoReq;
+  // Solo Modo Dios (o Semidios mientras esté ACTIVO) puede dejarlo pasar en el momento.
+  var necesitaAutorizacion = bajoMinimo && !puedeAutorizarPromos();
   var motivoAuth='';
-  if(necesitaAutorizacion){
-    if(puedeAutorizarPromos()){
-      // Semidios: auto-autoriza pero pide nota igualmente
-      motivoAuth=prompt('ℹ️ Modo Semidios activo. El pago ($'+pagoVal.toLocaleString('es-MX')+') es menor al precio del curso ($'+minimoReq.toLocaleString('es-MX')+').\nSe aplicará automáticamente. Indica el motivo (beca, caso especial, etc.):');
-      if(motivoAuth===null){ return; }
-      necesitaAutorizacion=false; // semidios auto-autoriza
-    } else {
-      motivoAuth=prompt('⚠️ El pago ($'+pagoVal.toLocaleString('es-MX')+') es menor al precio del curso ($'+minimoReq.toLocaleString('es-MX')+').\n\nLa matrícula se guardará como PENDIENTE DE AUTORIZACIÓN — el Modo Dios deberá aprobarla antes de que sea válida.\n\nEscribe el motivo del precio especial (beca, caso particular, etc.):');
+  if(bajoMinimo){
+    var _refAlta=_pisoAlta.descuento>0
+      ? 'precio con '+(_pisoAlta.promo?'promoción':'beca')+' ($'+minimoReq.toLocaleString('es-MX')+')'
+      : 'precio del curso ($'+minimoReq.toLocaleString('es-MX')+')';
+    if(necesitaAutorizacion){
+      motivoAuth=prompt('⚠️ El pago ($'+pagoVal.toLocaleString('es-MX')+') es menor al '+_refAlta+'.\n\n'
+        +(_pisoAlta.descuento>0?'':'No hay promoción ni beca marcada que justifique el precio.\n\n')
+        +'La matrícula se guardará como PENDIENTE DE AUTORIZACIÓN — el Modo Dios deberá aprobarla antes de que sea válida.\n\nEscribe el motivo del precio especial:');
       if(motivoAuth===null){ return; } // canceló — no guardar nada
+    } else {
+      motivoAuth=prompt('ℹ️ El pago ($'+pagoVal.toLocaleString('es-MX')+') es menor al '+_refAlta+'.\nSe aplicará automáticamente. Indica el motivo:');
+      if(motivoAuth===null){ return; }
     }
   }
   var promoSelEl=document.getElementById('f-promo');
@@ -5281,12 +5287,18 @@ async function guardarEdicion(folio){
   // ── Mismo gate de autorización que en Nueva Matrícula: si el pago editado ──
   // queda por debajo del mínimo del curso, requiere autorización del Modo Dios.
   var cursoObj=(STATE.cursos||[]).find(function(c){return c.nombre===nuevoCurso;});
-  var minimoReq=cursoObj?(cursoObj.pagoMinimo||0):0;
+  var _becaEdEl=document.getElementById('e-beca');
+  var _pisoEd=pisoPrecioCurso(cursoObj,
+    STATE.matrículas[idx].promoAplicada||'',
+    (_becaEdEl?_becaEdEl.value:'')||STATE.matrículas[idx].becaId||'');
+  var minimoReq=_pisoEd.piso; // costo del curso menos la promoción/beca de la matrícula
   var yaAutorizado=STATE.matrículas[idx].autorizacionPendiente===false||!STATE.matrículas[idx].autorizacionPendiente;
   var necesitaAutorizacion = minimoReq>0 && nuevoPago<minimoReq && !puedeAutorizarPromos();
   var motivoAuth='';
   if(necesitaAutorizacion){
-    motivoAuth=prompt('⚠️ El pago editado ($'+nuevoPago.toLocaleString('es-MX')+') es menor al mínimo del curso ($'+minimoReq.toLocaleString('es-MX')+').\n\nLos cambios se guardarán, pero requieren autorización del Modo Dios.\n\nExplica brevemente el motivo:');
+    motivoAuth=prompt('⚠️ El pago editado ($'+nuevoPago.toLocaleString('es-MX')+') es menor al mínimo del curso ($'+minimoReq.toLocaleString('es-MX')+').'
+      +(_pisoEd.descuento>0?'':'\n\nNo hay promoción ni beca marcada que justifique el precio.')
+      +'\n\nLos cambios se guardarán, pero requieren autorización del Modo Dios.\n\nExplica brevemente el motivo:');
     if(motivoAuth===null){ return; } // canceló — no guardar ningún cambio
   }
 
@@ -6693,6 +6705,36 @@ function getPromosVigentes(cm){
   });
 }
 
+
+// ── Piso de precio autorizado ───────────────────────────────────────────────
+// Un precio por debajo del costo del curso solo pasa sin autorización del Modo Dios
+// cuando viene respaldado por una promoción vigente o una beca marcada: lo que se
+// permite bajar es exactamente el descuento de esa promoción/beca. Sin promoción ni
+// beca, cualquier precio menor queda PENDIENTE de autorización, tenga el usuario el
+// rol que tenga (salvo Modo Dios, o Semidios mientras esté activo).
+function _montoNum(v){ return parseFloat(String(v==null?'':v).replace(/[^0-9.]/g,''))||0; }
+function _descuentoPromoSobre(promo, base, cursoNombre){
+  if(!promo) return 0;
+  if(promoRazonInvalida(promo, 1, cursoNombre||null)) return 0; // promo no vigente = no descuenta
+  return promo.tipo==='porcentaje' ? +(base*_montoNum(promo.valor)/100).toFixed(2) : _montoNum(promo.valor);
+}
+// {base, minimo, piso, descuento, promo, beca}. `minimo` = costo del curso;
+// `piso` = mínimo real ya descontadas la promoción y la beca marcadas.
+function pisoPrecioCurso(cursoObj, promoId, becaId){
+  var base=_montoNum(cursoObj&&cursoObj.costoBase);
+  var minimo=Math.max(_montoNum(cursoObj&&cursoObj.pagoMinimo), base);
+  var promo=promoId?(STATE.promociones||[]).find(function(x){return String(x.id)===String(promoId);}):null;
+  var beca=becaId?becaPorId(becaId):null;
+  var desc=_descuentoPromoSobre(promo, base, cursoObj&&cursoObj.nombre);
+  if(beca) desc+=(typeof becaDescuentoSobre==='function'?becaDescuentoSobre(beca, base):0);
+  return {base:base, minimo:minimo, descuento:desc, promo:promo, beca:beca,
+          piso:Math.max(0, +(minimo-desc).toFixed(2))};
+}
+function _promoBecaForm(pre){
+  pre=pre||'f';
+  var p=document.getElementById(pre+'-promo'), b=document.getElementById(pre+'-beca');
+  return {promoId:(p&&p.value)||'', becaId:(b&&b.value)||''};
+}
 
 function puedeAutorizarPromos(){
   return hasPerm('modo_dios') || (STATE.semidiosActivo && currentUser && currentUser.role==='admin');
@@ -12818,12 +12860,17 @@ function updateFirstPaymentStatus(){
   // Advertencia en f-pago
   var curso=document.getElementById('f-curso')?.value;
   var cursoObj=curso?(STATE.cursos||[]).find(function(c){return c.nombre===curso;}):null;
-  var minimoReq=cursoObj?Math.max(cursoObj.pagoMinimo||0,parseFloat(cursoObj.costoBase)||0):0;
+  var _pbW=_promoBecaForm('f');
+  var _pisoW=pisoPrecioCurso(cursoObj, _pbW.promoId, _pbW.becaId);
+  var minimoReq=_pisoW.piso;
   var warn=document.getElementById('f-pago-warn');
   if(warn){
     if(val>0&&minimoReq>0&&val<minimoReq){
       warn.style.display='block';
-      warn.innerHTML='⚠️ Precio por debajo del costo base ($'+minimoReq.toLocaleString('es-MX')+') — '+(puedeAutorizarPromos()?'el Semidios puede autorizarlo.':'se enviará a autorización del Modo Dios al guardar.');
+      warn.innerHTML='⚠️ Precio por debajo del '+(_pisoW.descuento>0?'precio con '+(_pisoW.promo?'promoción':'beca'):'costo base')
+        +' ($'+minimoReq.toLocaleString('es-MX')+') — '
+        +(puedeAutorizarPromos()?'el Semidios puede autorizarlo.':'se enviará a autorización del Modo Dios al guardar.')
+        +(_pisoW.descuento>0?'':' Marca una promoción o beca para justificar el precio.');
     } else { warn.style.display='none'; }
   }
 }
@@ -13555,15 +13602,23 @@ async function _guardarMatriculasMultiplesImpl(){
   var fpagoMod=fpPago&&fpPago.dataset.default!=='1'&&fpagoVal>0;
   var totalPago=fpagoMod?fpagoVal:(userInputTotal>0?userInputTotal:autoTotal);
   // ── Autorización si el precio está por debajo del costo base ──────────────
-  var cursoBase=parseFloat(String((cursoObj&&cursoObj.costoBase)||'').replace(/[^0-9.]/g,''))||0;
-  var minimoReqM=cursoObj?Math.max(cursoObj.pagoMinimo||0,cursoBase):0;
-  var necesitaAuthM=minimoReqM>0&&totalPago>0&&totalPago<minimoReqM&&!puedeAutorizarPromos();
-  var semidiosAuthM=minimoReqM>0&&totalPago>0&&totalPago<minimoReqM&&puedeAutorizarPromos();
+  var _pbMulti=_promoBecaForm('f');
+  var _pisoMulti=pisoPrecioCurso(cursoObj, _pbMulti.promoId, _pbMulti.becaId);
+  var cursoBase=_pisoMulti.base;
+  var minimoReqM=_pisoMulti.piso; // costo del curso menos la promoción/beca marcadas
+  var bajoMinimoM=minimoReqM>0&&totalPago>0&&totalPago<minimoReqM;
+  var necesitaAuthM=bajoMinimoM&&!puedeAutorizarPromos();
+  var semidiosAuthM=bajoMinimoM&&puedeAutorizarPromos();
   var motivoAuthM='';
-  if(necesitaAuthM||semidiosAuthM){
+  if(bajoMinimoM){
+    var _refM=_pisoMulti.descuento>0
+      ? 'precio con '+(_pisoMulti.promo?'promoción':'beca')+' $'+minimoReqM.toLocaleString('es-MX')
+      : 'costo base $'+minimoReqM.toLocaleString('es-MX');
     var msgAuth=semidiosAuthM
-      ?'ℹ️ Semidios activo. Total $'+totalPago.toLocaleString('es-MX')+' < costo base $'+minimoReqM.toLocaleString('es-MX')+'.\nSe autorizará automáticamente. Escribe el motivo:'
-      :'⚠️ Total $'+totalPago.toLocaleString('es-MX')+' < costo base $'+minimoReqM.toLocaleString('es-MX')+'.\nLa matrícula quedará PENDIENTE de autorización del Modo Dios.\nMotivo (beca, caso especial, etc.):';
+      ?'ℹ️ Total $'+totalPago.toLocaleString('es-MX')+' < '+_refM+'.\nSe autorizará automáticamente. Escribe el motivo:'
+      :'⚠️ Total $'+totalPago.toLocaleString('es-MX')+' < '+_refM+'.'
+        +(_pisoMulti.descuento>0?'':'\nNo hay promoción ni beca marcada que justifique el precio.')
+        +'\nLa matrícula quedará PENDIENTE de autorización del Modo Dios.\nMotivo:';
     motivoAuthM=prompt(msgAuth);
     if(motivoAuthM===null)return; // canceló
   }
